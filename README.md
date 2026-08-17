@@ -320,19 +320,42 @@ ledger**. Corrections made after the organizers' webinar (notably that our
 stage-rotation range was 10–20× too small) are tracked separately in
 [`docs/WEBINAR_CORRECTIONS.md`](docs/WEBINAR_CORRECTIONS.md), with quotes.
 
+### The generated datasets
+
+| Set | Pairs | Where it lives | Purpose |
+|---|---|---|---|
+| `curated30` | 30 | **in this repo** (`data/curated30/`) | showcase cases, annotated in `CASES.md` |
+| `val_resize60` | 60 | **in this repo** (`data/val_resize60/`) | held-out resize-domain generalisation test |
+| `eval200` | 200 | [release `datasets-v1`](../../releases/tag/datasets-v1) | primary evaluation set |
+| `train` | 4 000 | [release `datasets-v1`](../../releases/tag/datasets-v1) (3 parts) | training pool |
+
+Every archive unpacks to `images/` (1000 × 1000 PNG pairs), `labels.csv`
+(ground-truth coordinates plus every sampled parameter), `seeds.txt` and
+`dataset_meta.json`.
+
+```bash
+# fetch the full sets from the release
+gh release download datasets-v1 --repo itsAryan-devop/drift-sense --dir data/
+# the train set is split across three parts; unzip all of them into data/
+```
+
+The two smaller sets are committed directly so the repo is runnable and
+inspectable the moment it is cloned; the two large ones are release assets
+because a 4.8 GB git history would make the repo unusable to clone.
+
 ### Reproducibility
 
-The generator is deterministic. Any dataset regenerates **byte-identically**
-from its seed list:
+The generator is deterministic, so none of the above is strictly necessary —
+any set regenerates **byte-identically** from its seed list, which *is* tracked
+in git for all four:
 
 ```bash
 python generate_dataset.py --seeds-file data/eval200/seeds.txt --out data/eval200
 ```
 
-This is why the large image sets are not committed — the seed lists, manifests
-and metadata are, so every number in this README stays auditable without
-carrying ~4.8 GB of PNGs. `data/curated30` and `data/val_resize60` ship their
-images in full so the repo is inspectable immediately after clone.
+That is what keeps every number in this README auditable: the seeds, manifests
+and metadata are version-controlled, so a reviewer can rebuild the exact pixels
+any figure was computed from.
 
 ---
 
@@ -370,9 +393,12 @@ docs/                           problem analysis, generator spec, webinar notes
 data/
   curated30/                      30 showcase cases + CASES.md  (images included)
   val_resize60/                   held-out resize-domain set    (images included)
-  eval200/                        manifest + seeds (images regenerate from seeds)
-  train/                          manifest + seeds (4 000 pairs, ditto)
+  eval200/                        manifest + seeds  (images: release datasets-v1)
+  train/                          manifest + seeds  (4 000 pairs; ditto, 3 parts)
 ```
+
+Full image sets for `eval200` and `train` are published as **release
+[`datasets-v1`](../../releases/tag/datasets-v1)** — see §5.
 
 ---
 
