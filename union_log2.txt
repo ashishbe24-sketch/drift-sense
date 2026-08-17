@@ -1,0 +1,86 @@
+=== UNION RETRY (6000 pairs, cache reuse, RAM freed) Tue Aug 11 13:26:05 IST 2026 ===
+train pairs: 6000  batches/epoch: 1500  device: cuda
+ep 01/30  loss 3.538  eval1  86.0%  held-out  65.0%  (592s)
+    -> new best held-out 65.0%  (saved best.pt)
+ep 02/30  loss 1.227  eval1  92.0%  held-out  81.7%  (547s)
+    -> new best held-out 81.7%  (saved best.pt)
+ep 03/30  loss 1.009  eval1  96.0%  held-out  86.7%  (535s)
+    -> new best held-out 86.7%  (saved best.pt)
+ep 04/30  loss 0.861  eval1  96.0%  held-out  83.3%  (537s)
+ep 05/30  loss 0.763  eval1  94.0%  held-out  83.3%  (538s)
+ep 06/30  loss 0.686  eval1  98.0%  held-out  83.3%  (535s)
+ep 07/30  loss 0.634  eval1 100.0%  held-out  91.7%  (538s)
+    -> new best held-out 91.7%  (saved best.pt)
+ep 08/30  loss 0.583  eval1 100.0%  held-out  85.0%  (534s)
+ep 09/30  loss 0.547  eval1 100.0%  held-out  86.7%  (533s)
+ep 10/30  loss 0.514  eval1 100.0%  held-out  90.0%  (540s)
+ep 11/30  loss 0.484  eval1 100.0%  held-out  90.0%  (536s)
+ep 12/30  loss 0.454  eval1 100.0%  held-out  88.3%  (537s)
+ep 13/30  loss 0.428  eval1  98.0%  held-out  90.0%  (538s)
+ep 14/30  loss 0.398  eval1 100.0%  held-out  91.7%  (534s)
+ep 15/30  loss 0.386  eval1 100.0%  held-out  90.0%  (536s)
+ep 16/30  loss 0.357  eval1 100.0%  held-out  91.7%  (2865s)
+ep 17/30  loss 0.340  eval1 100.0%  held-out  88.3%  (561s)
+ep 18/30  loss 0.318  eval1 100.0%  held-out  90.0%  (556s)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\semicon\driftmatch\train.py", line 148, in <module>
+    main()
+  File "D:\semicon\driftmatch\train.py", line 106, in main
+    for ref, wide, hm, off, cell, _gt in dl:
+                                         ^^
+  File "C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\dataloader.py", line 701, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\dataloader.py", line 757, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "D:\semicon\driftmatch\data.py", line 105, in __getitem__
+    wide = self.wide_c[i].astype(np.float32) / 255.0
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 3.81 MiB for an array with shape (1000, 1000) and data type float32
+[EVAL] THEIR default
+=== cross-domain: THEIR generator (200 pairs) ===
+method           acc@5px  acc@10px   median  ms/pair
+ZNCC (theirs)      75.5%     77.0%     1.0     182
+DriftFind          75.0%     76.0%     1.0     677
+DriftRoute         92.5%     92.5%     0.9     136
+[EVAL] THEIR noisy
+=== cross-domain: THEIR generator (300 pairs) ===
+method           acc@5px  acc@10px   median  ms/pair
+ZNCC (theirs)      59.0%     63.7%     2.6     197
+DriftFind          56.3%     61.3%     2.8     749
+DriftRoute         77.3%     84.7%     1.6     196
+[EVAL] OUR val_resize60
+=== DriftMatchNet (D:/semicon/driftmatch/checkpoints/best.pt, epoch 7) on D:\semicon\data\val_resize60  device=cuda ===
+
+ALL  (n=60)
+  median 1.03 px   mean 74.93 px
+    <=  1 px :  50.0 %
+    <=  2 px :  73.3 %
+    <=  5 px :  75.0 %
+    <= 10 px :  75.0 %
+    <= 25 px :  75.0 %
+
+plain  (n=38)
+  median 0.72 px   mean 12.93 px
+    <=  1 px :  63.2 %
+    <=  2 px :  92.1 %
+    <=  5 px :  94.7 %
+    <= 10 px :  94.7 %
+    <= 25 px :  94.7 %
+
+multi-match  (n=22)
+  median 132.88 px   mean 182.04 px
+    <=  1 px :  27.3 %
+    <=  2 px :  40.9 %
+    <=  5 px :  40.9 %
+    <= 10 px :  40.9 %
+    <= 25 px :  40.9 %
+
+time/pair: mean 47 ms  median 40 ms
+=== UNION RETRY DONE Tue Aug 11 16:59:28 IST 2026 ===

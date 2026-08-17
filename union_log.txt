@@ -1,0 +1,77 @@
+=== UNION START Tue Aug 11 10:01:17 IST 2026 ===
+[preserve] saved specialist -> best_theirs_domain.pt
+[1/4 GEN] our-domain pairs (2000, our physics renderer)  Tue Aug 11 10:01:22 IST 2026
+2000 pairs in 2118.6s  (1.06s/pair, 10 workers)  ->  D:\Temp\claude\D--semicon\554e4c23-4b58-4c48-b4b1-2846205aea1a\scratchpad\ds_ref\ourdata
+  regimes: aliased 319, uniform placement 259, landmark below the ~30 nm visibility floor 0
+[2/4 MERGE] their(4000) + ours(2000) -> union  Tue Aug 11 10:36:48 IST 2026
+union rows: 6000
+[3/4 TRAIN] 30 epochs on UNION (memmap, best.pt on their-noisy)  Tue Aug 11 10:36:50 IST 2026
+train pairs: 6000  batches/epoch: 1500  device: cuda
+ep 01/30  loss 5.413  eval1  84.0%  held-out  61.7%  (566s)
+    -> new best held-out 61.7%  (saved best.pt)
+ep 02/30  loss 1.331  eval1  92.0%  held-out  73.3%  (561s)
+    -> new best held-out 73.3%  (saved best.pt)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\semicon\driftmatch\train.py", line 148, in <module>
+    main()
+  File "D:\semicon\driftmatch\train.py", line 106, in main
+    for ref, wide, hm, off, cell, _gt in dl:
+                                         ^^
+  File "C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\dataloader.py", line 701, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\dataloader.py", line 757, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "D:\semicon\driftmatch\data.py", line 99, in __getitem__
+    wide = self.wide_c[i].astype(np.float32) / 255.0
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 3.81 MiB for an array with shape (1000, 1000) and data type float32
+[4/4 FINAL EVAL across domains]  Tue Aug 11 12:33:18 IST 2026
+-- THEIR default --
+=== cross-domain: THEIR generator (200 pairs) ===
+method           acc@5px  acc@10px   median  ms/pair
+ZNCC (theirs)      75.5%     77.0%     1.0     202
+DriftFind          75.0%     76.0%     1.0     746
+DriftRoute         83.0%     83.0%     1.0     430
+-- THEIR noisy --
+=== cross-domain: THEIR generator (300 pairs) ===
+method           acc@5px  acc@10px   median  ms/pair
+ZNCC (theirs)      59.0%     63.7%     2.6     206
+DriftFind          56.3%     61.3%     2.8     774
+DriftRoute         68.0%     74.0%     1.8     504
+-- OUR held-out (val_resize60), net --
+=== DriftMatchNet (D:/semicon/driftmatch/checkpoints/best.pt, epoch 2) on D:\semicon\data\val_resize60  device=cuda ===
+
+ALL  (n=60)
+  median 1.25 px   mean 96.83 px
+    <=  1 px :  35.0 %
+    <=  2 px :  58.3 %
+    <=  5 px :  66.7 %
+    <= 10 px :  66.7 %
+    <= 25 px :  68.3 %
+
+plain  (n=38)
+  median 1.06 px   mean 21.24 px
+    <=  1 px :  42.1 %
+    <=  2 px :  76.3 %
+    <=  5 px :  89.5 %
+    <= 10 px :  89.5 %
+    <= 25 px :  89.5 %
+
+multi-match  (n=22)
+  median 241.82 px   mean 227.40 px
+    <=  1 px :  22.7 %
+    <=  2 px :  27.3 %
+    <=  5 px :  27.3 %
+    <= 10 px :  27.3 %
+    <= 25 px :  31.8 %
+
+time/pair: mean 49 ms  median 40 ms
+=== UNION DONE Tue Aug 11 12:46:20 IST 2026 ===
+best.pt = generalist (union); best_theirs_domain.pt = specialist. Compare in log.

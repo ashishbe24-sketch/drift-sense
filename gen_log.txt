@@ -1,0 +1,72 @@
+=== CONTINUE generalist to epoch 30 (12 more from ep18)  Tue Aug 11 19:49:40 IST 2026 ===
+train pairs: 6000  batches/epoch: 1500  device: cuda
+resumed D:/semicon/driftmatch/checkpoints/best_generalist.pt: prev epoch 18, held-out 90.0%
+ep 01/12  loss 0.428  eval1 100.0%  held-out  88.3%  (1346s)
+ep 02/12  loss 0.418  eval1 100.0%  held-out  90.0%  (1358s)
+ep 03/12  loss 0.400  eval1 100.0%  held-out  88.3%  (1361s)
+ep 04/12  loss 0.381  eval1 100.0%  held-out  88.3%  (1356s)
+ep 05/12  loss 0.340  eval1 100.0%  held-out  88.3%  (1360s)
+ep 06/12  loss 0.316  eval1 100.0%  held-out  88.3%  (1312s)
+ep 07/12  loss 0.286  eval1 100.0%  held-out  91.7%  (1363s)
+    -> new best held-out 91.7%  (saved best.pt)
+ep 08/12  loss 0.253  eval1 100.0%  held-out  86.7%  (1346s)
+ep 09/12  loss 0.230  eval1 100.0%  held-out  86.7%  (1354s)
+ep 10/12  loss 0.211  eval1 100.0%  held-out  86.7%  (1357s)
+ep 11/12  loss 0.200  eval1 100.0%  held-out  86.7%  (1295s)
+ep 12/12  loss 0.190  eval1 100.0%  held-out  88.3%  (1342s)
+done. best held-out 91.7%
+  83.3%  (1346s)
+ep 09/10  loss 0.216  eval1 100.0%  held-out  85.0%  (1354s)
+ep 10/10  loss 0.202  eval1 100.0%  held-out  85.0%  (1357s)
+done. best held-out 91.7%
+
+--- CHUNK 3/6  (cumulative ~ep 38 -> 48)  Tue Aug 11 23:35:05 IST 2026 ---
+train pairs: 6000  batches/epoch: 1500  device: cuda
+resumed D:/semicon/driftmatch/checkpoints_gen/last.pt: prev epoch 10, held-out 85.0%
+ep 01/10  loss 0.349  eval1 100.0%  held-out  85.0%  (1346s)
+ep 02/10  loss 0.356  eval1 100.0%  held-out  86.7%  (1294s)
+    -> new best held-out 8=== cross-domain: THEIRep 03/10  loss 0.325  eval1 100.0%  held-out  90.0%  (570s)
+    -> new best held-out 90.0%  (saved best.pt)
+ep 04/10  loss 0.307  eval1 100.0%  held-out  88.3%  (556s)
+ep 05/10  loss 0.274  eval1 100.0%  held-out  88.3%  (691s)
+ep 06/10  loss 0.246  eval1 100.0%  held-out  90.0%  (550s)
+ep 07/10  loss 0.219  eval1 100.0%  held-out  90.0%  (552s)
+ep 08/10  loss 0.194  eval1 100.0%  held-out  91.7%  (554s)
+    -> new best held-out 91.7%  (saved best.pt)
+ep 09/10  loss 0.180  eval1 100.0%  held-out  88.3%  (546s)
+ep 10/10  loss 0.169  eval1 100.0%  held-out  88.3%  (546s)
+done. best held-out 91.7%
+ D:\semicon\data\val_resize60  device=cuda ===
+
+ALL  (n=60)
+  median 0.60 px   mean 53.09 px
+    <=  1 px :  68.3 %
+    <=  2 px :  73.3 %
+    <=  5 px :  75.0 %
+    <= 10 px :  75.0 %
+    <= 25 px :  75.0 %
+
+plain  (n=38)
+  median 0.53 px   mean 7.90 px
+    <=  1 px :  84.2 %
+    <=  2 px :  92.1 %
+    <=  5 px :  94.7 %
+    <= 10 px :  94.7 %
+    <= 25 px :  94.7 %
+
+multi-match  (n=22)
+  median 112.94 px   mean 131.17 px
+    <=  1 px :  40.9 %
+    <=  2 px :  40.9 %
+    <=  5 px :  40.9 %
+    <= 10 px :  40.9 %
+    <= 25 px :  40.9 %
+
+time/pair: mean 88 ms  median 77 ms
+=== DONE Wed Aug 12 00:31:12 IST 2026 ===
+
+--- CHUNK 4/6  (cumulative ~ep 48 -> 58)  Wed Aug 12 01:35:46 IST 2026 ---
+train pairs: 6000  batches/epoch: 1500  device: cuda
+resumed D:/semicon/driftmatch/checkpoints_gen/last.pt: prev epoch 10, held-out 88.3%
+ep 01/10  loss 0.307  eval1 100.0%  held-out  85.0%  (554s)
+

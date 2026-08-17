@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# Environment / build artefacts
+# ---------------------------------------------------------------------------
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Scratch renders, contact sheets and diagnostic dumps produced while
+# developing. Nothing here is an input to training or evaluation.
+out/
+
+# ---------------------------------------------------------------------------
+# Third-party imagery that we are NOT licensed to redistribute
+# ---------------------------------------------------------------------------
+# MIIC (Microscopic Images of Integrated Circuits, Huang et al., ICIP 2021) is
+# copyright and licensed for non-commercial research use only. It was used
+# here solely to MEASURE calibration statistics (edge-contrast ratios, noise
+# floors) that informed the renderer's parameters. No model is trained on it
+# and no pixel of it ships in this repository. See docs/SEM_CALIBRATION_AND_
+# LITERATURE.md for what was measured and how.
+data/reference/
+data/miic_*
+*_miic_*.png
+
+# Archives belonging to a different problem statement (PS-01, KLA image
+# restoration). Not ours to redistribute and not used by this project.
+data/*.rar
+
+# ---------------------------------------------------------------------------
+# Large generated image sets
+# ---------------------------------------------------------------------------
+# The generator is deterministic: `generate_dataset.py --seeds-file seeds.txt`
+# reconstructs these byte-identically, which is verified. The manifests
+# (labels.csv), the seed lists and the dataset metadata ARE tracked, so every
+# reported number stays auditable without carrying ~4.8 GB of PNGs.
+#
+# data/curated30 and data/val_resize60 ship their images in full, so the repo
+# is runnable and inspectable straight after clone.
+data/train/images/
+data/train/pairs/
+data/eval200/images/
+data/eval200/pairs/
+
+# Intermediate training caches (multi-GB memory-mapped tensors)
+*.mmap
+
+# ---------------------------------------------------------------------------
+# Working notes kept out of the published record
+# ---------------------------------------------------------------------------
+SEMICON_HANDOFF*.md
+
+# Superseded slide decks (only the submitted deck is tracked)
+DriftSense_AppliedMaterials_PS02.pptx
+TheTGuys_PS02.pptx
+TheTGuys_PS02_FINAL.pptx
+TheTGuys_PS02_clean.pptx
+TheTGuys_PS02_official.pptx
+
+# Intermediate training outputs. The four documented checkpoints in
+# driftmatch/checkpoints/ (best + three ablation variants) are tracked; the
+# per-run scratch copies are not.
+driftmatch/checkpoints_gen/
+driftmatch/checkpoints/last.pt

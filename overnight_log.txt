@@ -1,0 +1,89 @@
+=== OVERNIGHT START Tue Aug 11 02:29:07 IST 2026 ===
+
+[notice] A new release of pip is available: 25.2 -> 26.2.1
+[notice] To update, run: C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\python.exe -m pip install --upgrade pip
+[env] cv2 ready for py312
+[1/4 GEN] 4000 randomized pairs (heavy-noise coverage)  Tue Aug 11 02:29:21 IST 2026
+[200/4000]
+[400/4000]
+[600/4000]
+[800/4000]
+[1000/4000]
+[1200/4000]
+[1400/4000]
+[1600/4000]
+[1800/4000]
+[2000/4000]
+[2200/4000]
+[2400/4000]
+[2600/4000]
+[2800/4000]
+[3000/4000]
+[3200/4000]
+[3400/4000]
+[3600/4000]
+[3800/4000]
+[4000/4000]
+done -> ./rrdata\train
+wrote D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/ds_ref/rrdata/train\labels.csv (4000 rows)
+[GEN] train pairs = 4000  Tue Aug 11 03:53:27 IST 2026
+[2/4 TRAIN] 35 epochs, memmap (crash-proof), best.pt checkpointed on the NOISY held-out  Tue Aug 11 03:53:27 IST 2026
+train pairs: 4000  batches/epoch: 1000  device: cuda
+ep 01/35  loss 7.931  eval1  84.0%  held-out  71.7%  (361s)
+    -> new best held-out 71.7%  (saved best.pt)
+ep 02/35  loss 1.190  eval1  90.0%  held-out  75.0%  (360s)
+    -> new best held-out 75.0%  (saved best.pt)
+ep 03/35  loss 0.964  eval1  96.0%  held-out  81.7%  (362s)
+    -> new best held-out 81.7%  (saved best.pt)
+ep 04/35  loss 0.825  eval1 100.0%  held-out  85.0%  (362s)
+    -> new best held-out 85.0%  (saved best.pt)
+ep 05/35  loss 0.711  eval1  96.0%  held-out  83.3%  (363s)
+ep 06/35  loss 0.649  eval1 100.0%  held-out  88.3%  (360s)
+    -> new best held-out 88.3%  (saved best.pt)
+ep 07/35  loss 0.579  eval1 100.0%  held-out  90.0%  (357s)
+    -> new best held-out 90.0%  (saved best.pt)
+ep 08/35  loss 0.539  eval1  98.0%  held-out  90.0%  (355s)
+ep 09/35  loss 0.508  eval1 100.0%  held-out  90.0%  (358s)
+ep 10/35  loss 0.469  eval1 100.0%  held-out  90.0%  (357s)
+ep 11/35  loss 0.444  eval1 100.0%  held-out  88.3%  (355s)
+ep 12/35  loss 0.402  eval1 100.0%  held-out  90.0%  (355s)
+ep 13/35  loss 0.385  eval1 100.0%  held-out  90.0%  (354s)
+ep 14/35  loss 0.355  eval1 100.0%  held-out  90.0%  (355s)
+ep 15/35  loss 0.348  eval1  98.0%  held-out  91.7%  (355s)
+    -> new best held-out 91.7%  (saved best.pt)
+ep 16/35  loss 0.313  eval1 100.0%  held-out  88.3%  (355s)
+ep 17/35  loss 0.293  eval1 100.0%  held-out  90.0%  (355s)
+ep 18/35  loss 0.281  eval1  98.0%  held-out  91.7%  (359s)
+ep 19/35  loss 0.256  eval1 100.0%  held-out  86.7%  (364s)
+ep 20/35  loss 0.238  eval1 100.0%  held-out  88.3%  (359s)
+ep 21/35  loss 0.226  eval1 100.0%  held-out  88.3%  (364s)
+ep 22/35  loss 0.213  eval1 100.0%  held-out  88.3%  (364s)
+ep 23/35  loss 0.199  eval1 100.0%  held-out  90.0%  (365s)
+ep 24/35  loss 0.185  eval1 100.0%  held-out  88.3%  (362s)
+ep 25/35  loss 0.178  eval1 100.0%  held-out  88.3%  (361s)
+ep 26/35  loss 0.171  eval1 100.0%  held-out  86.7%  (364s)
+ep 27/35  loss 0.162  eval1 100.0%  held-out  88.3%  (365s)
+ep 28/35  loss 0.159  eval1 100.0%  held-out  88.3%  (362s)
+ep 29/35  loss 0.153  eval1 100.0%  held-out  88.3%  (361s)
+ep 30/35  loss 0.148  eval1 100.0%  held-out  88.3%  (362s)
+ep 31/35  loss 0.144  eval1 100.0%  held-out  88.3%  (363s)
+ep 32/35  loss 0.143  eval1 100.0%  held-out  88.3%  (365s)
+ep 33/35  loss 0.140  eval1 100.0%  held-out  88.3%  (363s)
+ep 34/35  loss 0.139  eval1 100.0%  held-out  88.3%  (365s)
+ep 35/35  loss 0.139  eval1 100.0%  held-out  88.3%  (362s)
+done. best held-out 91.7%
+[TRAIN] done  Tue Aug 11 07:28:12 IST 2026
+[3/4 EVAL DEFAULT] refdata/test (DriftFind vs DriftRoute vs ZNCC, acc@5px)  Tue Aug 11 07:28:12 IST 2026
+=== cross-domain: THEIR generator (200 pairs) ===
+method           acc@5px  acc@10px   median  ms/pair
+ZNCC (theirs)      75.5%     77.0%     1.0     141
+DriftFind          75.0%     76.0%     1.0     545
+DriftRoute         95.5%     95.5%     0.6     142
+[4/4 EVAL NOISY] rrdata/heldout  Tue Aug 11 07:31:22 IST 2026
+=== cross-domain: THEIR generator (300 pairs) ===
+method           acc@5px  acc@10px   median  ms/pair
+ZNCC (theirs)      59.0%     63.7%     2.6     141
+DriftFind          56.3%     61.3%     2.8     551
+DriftRoute         84.0%     90.3%     1.3     164
+=== OVERNIGHT DONE Tue Aug 11 07:36:02 IST 2026 ===
+best.pt is the trained net; read this log top-to-bottom for the trajectory.
