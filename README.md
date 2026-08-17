@@ -10,7 +10,7 @@
 75.5 % for the provided ZNCC baseline — a +19 point improvement, at ~150–430 ms
 per pair on a 4 GB laptop GPU.**
 
----
+----
 
 ## Team — "The T Guys"
 
