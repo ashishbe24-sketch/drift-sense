@@ -3,15 +3,18 @@
 # so the net learns generator-INVARIANT features (robust to an unseen 3rd domain),
 # not one generator's fingerprint. Preserves the current specialist checkpoint.
 set +e
-VENV="D:/semicon/.venv/Scripts/python.exe"
+SEM="${SEM:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Checkout of the organizers' reference generator (HuggingFace Space
+# aayushraina21/drift-sense-synthetic-data). Override with REF_ROOT=...
+REF_ROOT="${REF_ROOT:-$SEM/ds_ref}"
+VENV="$SEM/.venv/Scripts/python.exe"
 PY312="C:/Users/ARYAN/AppData/Local/Programs/Python/Python312/python.exe"
-SEM="D:/semicon"
-DS="D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/ds_ref"
-XEVAL="D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/xdomain_eval.py"
+DS="$REF_ROOT"
+XEVAL="$SEM/scripts/eval_manifest.py"
 THEIR="$DS/rrdata/train"
 OURS="$DS/ourdata"
 UNION="$DS/uniondata"
-LOG="D:/semicon/union_log.txt"
+LOG="$SEM/union_log.txt"
 
 echo "=== UNION START $(date) ===" > "$LOG"
 powershell -c "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force" 2>/dev/null; sleep 3

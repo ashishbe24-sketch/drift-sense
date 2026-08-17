@@ -25,7 +25,7 @@
 [3800/4000]
 [4000/4000]
 done -> ./rrdata\train
-wrote D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/ds_ref/rrdata/train\labels.csv (4000 rows)
+wrote <REF_ROOT>/rrdata/train\labels.csv (4000 rows)
 [GEN] train pairs = 4000  Tue Aug 11 03:53:27 IST 2026
 [2/4 TRAIN] 35 epochs, memmap (crash-proof), best.pt checkpointed on the NOISY held-out  Tue Aug 11 03:53:27 IST 2026
 train pairs: 4000  batches/epoch: 1000  device: cuda

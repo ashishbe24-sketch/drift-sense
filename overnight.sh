@@ -2,12 +2,16 @@
 # Autonomous overnight: bigger dataset + long training + eval on their generator.
 # Everything logged to overnight_log.txt. Runs unattended.
 set +e
-VENV="D:/semicon/.venv/Scripts/python.exe"
+SEM="${SEM:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Checkout of the organizers' reference generator (HuggingFace Space
+# aayushraina21/drift-sense-synthetic-data). Override with REF_ROOT=...
+REF_ROOT="${REF_ROOT:-$SEM/ds_ref}"
+VENV="$SEM/.venv/Scripts/python.exe"
 PY312="C:/Users/ARYAN/AppData/Local/Programs/Python/Python312/python.exe"
-DS="D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/ds_ref"
-XEVAL="D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/xdomain_eval.py"
-CONV="D:/Temp/claude/D--semicon/554e4c23-4b58-4c48-b4b1-2846205aea1a/scratchpad/convert_manifest.py"
-LOG="D:/semicon/overnight_log.txt"
+DS="$REF_ROOT"
+XEVAL="$SEM/scripts/eval_manifest.py"
+CONV="$SEM/scripts/convert_manifest.py"
+LOG="$SEM/overnight_log.txt"
 
 echo "=== OVERNIGHT START $(date) ===" > "$LOG"
 powershell -c "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force" 2>/dev/null

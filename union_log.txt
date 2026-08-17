@@ -1,7 +1,7 @@
 === UNION START Tue Aug 11 10:01:17 IST 2026 ===
 [preserve] saved specialist -> best_theirs_domain.pt
 [1/4 GEN] our-domain pairs (2000, our physics renderer)  Tue Aug 11 10:01:22 IST 2026
-2000 pairs in 2118.6s  (1.06s/pair, 10 workers)  ->  D:\Temp\claude\D--semicon\554e4c23-4b58-4c48-b4b1-2846205aea1a\scratchpad\ds_ref\ourdata
+2000 pairs in 2118.6s  (1.06s/pair, 10 workers)  ->  <REF_ROOT>\ourdata
   regimes: aliased 319, uniform placement 259, landmark below the ~30 nm visibility floor 0
 [2/4 MERGE] their(4000) + ours(2000) -> union  Tue Aug 11 10:36:48 IST 2026
 union rows: 6000
