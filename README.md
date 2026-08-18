@@ -1,4 +1,4 @@
-# Drift-Sense — Sub-Pixel Site Re-Location in SEM Wafer Navigation
+ Drift-Sense — Sub-Pixel Site Re-Location in SEM Wafer Navigation
 
 **PS-02 · Applied Materials · SEMICON India Hackathon 2026 (i4C / IESA)**
 
