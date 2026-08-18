@@ -346,11 +346,21 @@ because a 4.8 GB git history would make the repo unusable to clone.
 ### Reproducibility
 
 The generator is deterministic, so none of the above is strictly necessary —
-any set regenerates **byte-identically** from its seed list, which *is* tracked
-in git for all four:
+`eval200`, `train` and `val_resize60` each regenerate **byte-identically** from
+the seed list tracked in git beside them:
 
 ```bash
 python generate_dataset.py --seeds-file data/eval200/seeds.txt --out data/eval200
+python generate_dataset.py --seeds-file data/val_resize60/seeds.txt --render-mode resize --workers 1 --out data/val_resize60
+```
+
+`curated30` is the one exception, by construction: it is three 6-step *ladders*
+plus 12 individual cases, so several pairs share one base seed and differ only
+in the single variable the ladder sweeps. Its 30 pairs rebuild from the 12
+tracked seeds through the script that composes them:
+
+```bash
+python scripts/make_curated30.py --out data/curated30
 ```
 
 That is what keeps every number in this README auditable: the seeds, manifests
