@@ -39,7 +39,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ref", nargs="?")
     ap.add_argument("wide", nargs="?")
-    ap.add_argument("--ckpt", default="driftmatch/checkpoints/best.pt")
+    ap.add_argument("--ckpt", default=None,
+                    help="checkpoint to load (default: the shipped best.pt)")
     ap.add_argument("--csv", type=pathlib.Path)
     ap.add_argument("--root", type=pathlib.Path, default=pathlib.Path("."))
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("predictions_router.csv"))

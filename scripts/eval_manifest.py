@@ -60,7 +60,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("manifest")
     ap.add_argument("--limit", type=int, default=0, help="score only the first N pairs")
-    ap.add_argument("--ckpt", default="driftmatch/checkpoints/best.pt")
+    ap.add_argument("--ckpt", default=None,
+                    help="checkpoint to load (default: the shipped best.pt)")
     ap.add_argument("--baseline-root", default=None,
                     help="checkout of the reference generator, to also score its ZNCC baseline")
     args = ap.parse_args()

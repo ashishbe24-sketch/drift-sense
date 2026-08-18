@@ -7,7 +7,9 @@ SEM="${SEM:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # aayushraina21/drift-sense-synthetic-data). Override with REF_ROOT=...
 REF_ROOT="${REF_ROOT:-$SEM/ds_ref}"
 VENV="$SEM/.venv/Scripts/python.exe"
-PY312="C:/Users/ARYAN/AppData/Local/Programs/Python/Python312/python.exe"
+# Interpreter with torch installed. Override with PY312=... (or just PY312=python
+# if torch lives in the default interpreter).
+PY312="${PY312:-C:/Users/ARYAN/AppData/Local/Programs/Python/Python312/python.exe}"
 DS="$REF_ROOT"
 XEVAL="$SEM/scripts/eval_manifest.py"
 CONV="$SEM/scripts/convert_manifest.py"

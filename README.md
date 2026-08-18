@@ -1,4 +1,4 @@
- Drift-Sense — Sub-Pixel Site Re-Location in SEM Wafer Navigation
+# Drift-Sense — Sub-Pixel Site Re-Location in SEM Wafer Navigation
 
 **PS-02 · Applied Materials · SEMICON India Hackathon 2026 (i4C / IESA)**
 
@@ -10,7 +10,7 @@
 75.5 % for the provided ZNCC baseline — a +19 point improvement, at ~150–430 ms
 per pair on a 4 GB laptop GPU.**
 
-----
+---
 
 ## Team — "The T Guys"
 
