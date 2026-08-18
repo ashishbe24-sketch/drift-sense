@@ -62,3 +62,6 @@ TheTGuys_PS02_official.pptx
 # per-run scratch copies are not.
 driftmatch/checkpoints_gen/
 driftmatch/checkpoints/last.pt
+
+data/_demo/
+data/_seedscan/
