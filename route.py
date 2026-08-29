@@ -19,12 +19,14 @@ on any machine.
 """
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 
 import numpy as np
 from scipy.ndimage import maximum_filter
 
 from solve import locate as locate_classical
+import solve
 
 # driftmatch pulls in torch, so it is imported lazily, inside the branches that
 # actually need the network. That is what makes the classical fallback real:
@@ -70,6 +72,105 @@ def locate(reference, wide, net=None, device="cpu", ratio=MULTI_RATIO):
     if is_multimatch(hm, ratio):
         return locate_classical(reference, wide)          # classical wins here
     return predict_from_response(hm, off, center_rule=True)  # net wins here
+
+
+# Rejection threshold for the Phase 2 `found` flag, on the peak NCC.
+#
+# This value and the *choice of signal* were settled by calibration, and the
+# choice reversed once on more data -- worth recording so it is not re-litigated:
+# on a small (18-pair) set the distinctiveness signal peak*(1-second_ratio) beat
+# raw peak (F1 1.0 vs 0.86), but on a larger, harder 60-pair set with more
+# aliased/multi-match present pairs, raw peak clearly won (F1 0.925 vs 0.854).
+# The reason: a present-but-periodic pair still has a strong landmark peak (high
+# raw peak) but low distinctiveness (its decoys tie it), so `distinct` conflates
+# "absent" with "present-and-periodic" -- exactly the Set C trap. Raw peak does
+# not. Peak is also the natural confidence for the `score` column, so one signal
+# serves both.
+#
+# 0.70 -> 0.68: a regression check on curated30 (Phase 1 data, always present)
+# found ONE pair (C09, a hard noise-ladder case) falsely rejected at 0.70 (peak
+# 0.6857). This mattered more than a plain F1 check suggests: a false reject on
+# a genuinely-present pair zeros BOTH its localization credit (found=0 forces
+# the pose columns to 0) AND counts as a rejection-F1 false-negative -- a false
+# accept on an absent pair only costs the second. Re-swept the threshold on the
+# 60-pair calibration set optimizing cost under false-reject weights of 1x/2x/3x
+# (not just raw F1): **0.68 is cost-optimal under all three weightings**
+# (FN=1, FP=6, F1=0.925 -- identical to 0.70's F1, so this is not a tradeoff,
+# it is a clean improvement) and it clears C09's 0.6857. STILL PROVISIONAL:
+# recalibrate on the organizers' data / a larger set, and re-check once Q2 (the
+# rejection-F1 positive class) is answered. Residual risk: C09 clears by only
+# 0.006 -- a thin margin, not a robust one; a better long-term fix is a
+# multi-signal rejection score, not a single-threshold peak cutoff.
+# `solve.locate` still returns `distinct`/`second_ratio` for that future work.
+FOUND_PEAK = 0.68
+
+
+@dataclasses.dataclass
+class PairResult:
+    """The six Phase 2 output fields for one pair (slide 5 contract).
+
+    When found == 0, the pose columns (x, y, theta, scale) are zeroed by
+    as_row(), per "When 0, write 0 in the pose columns".
+    """
+    x: float
+    y: float
+    theta: float
+    scale: float
+    found: int
+    score: float
+
+    def as_row(self):
+        if not self.found:
+            return dict(x=0.0, y=0.0, theta=0.0, scale=0.0, found=0,
+                        score=round(self.score, 6))
+        # `+ 0.0` normalises a negative zero (from the theta sign flip) to 0.0.
+        return dict(x=round(self.x, 3), y=round(self.y, 3),
+                    theta=round(self.theta, 4) + 0.0, scale=round(self.scale, 4),
+                    found=1, score=round(self.score, 6))
+
+
+def predict_full(reference, wide, net=None, device="cpu",
+                 found_threshold=FOUND_PEAK) -> PairResult:
+    """Produce all six Phase 2 fields for one pair.
+
+    v2 -- a validated hybrid, not a guess: classical scale-search supplies
+    `theta`, `scale`, `found`, `score`; the net supplies `x, y` when available.
+
+    Why split it this way (measured, not assumed, on a 116-pair full-aberration
+    set, 29 Aug overnight): feeding the net a reference resampled to the
+    classical-estimated scale ("helping" it) actually HURT it (86% @5px) versus
+    feeding it the reference at the fixed 10x downsample it was trained on, with
+    no scale correction at all (89% @5px) -- the net's encoder was trained on a
+    fixed 100x100 footprint, so a variable-sized stamp is out-of-distribution for
+    it, and it has separately learned to be tolerant of the resulting scale
+    mismatch. So the net's OWN (x, y) at fixed-10 beats both classical alone
+    (88%) and a "corrected" net. But the net has no scale/pose head, so
+    `scale`/`theta`/`found`/`score` still come from classical -- needed anyway,
+    not just as a hedge. Combined: 89% @5px, 1.6s/pair (well inside the 5s CPU
+    budget). If no net is available (no torch, no checkpoint), falls back to
+    classical's own (x, y) -- degrades, does not fail. register.py calls only
+    this function, so this design can be revised without touching the I/O layer.
+    """
+    # Phase 2 runs on unknown zoom in [8,12], so the scale search is always on.
+    # It recovers ~10 on nominal pairs and the true value off-nominal.
+    x, y, info = solve.locate(reference, wide, return_info=True,
+                              scales=solve.PHASE2_SCALES)
+    if net is not None:
+        try:
+            from driftmatch.infer import net_response, predict_from_response
+            hm, off = net_response(net, reference, wide, device)
+            x, y = predict_from_response(hm, off, center_rule=True)
+        except Exception as e:                # noqa: BLE001 -- degrade, don't crash
+            print(f"[route] net inference failed ({type(e).__name__}: {e}); "
+                  f"using classical x,y for this pair", file=__import__("sys").stderr)
+    # `found` thresholds the peak NCC (the signal that separated present/absent
+    # best on the larger validation set); `score` is that same peak, a natural
+    # confidence for the calibration column. Its optimal definition for the
+    # present/absent-mixed AUC may be refined once Q3 is answered.
+    score = info["score"]
+    found = int(score >= found_threshold)
+    return PairResult(x=x, y=y, theta=info["theta"], scale=info["scale"],
+                      found=found, score=score)
 
 
 def load_net(ckpt_path=None):

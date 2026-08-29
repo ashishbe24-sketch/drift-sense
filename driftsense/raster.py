@@ -150,12 +150,18 @@ def capture(layout: Layout, centre_nm: tuple, px_nm: float, n_px: int = 1000,
 
 def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
               ref_px_nm: float = 1.0, wide_px_nm: float = 10.0,
-              n_px: int = 1000, supersample: int = 1):
+              n_px: int = 1000, supersample: int = 1, absent: bool = False):
     """Render one (reference, wide) pair from a single layout.
 
     target_nm : nm coordinate of the site, normally the landmark centre
     offset_px : where the site lands in the wide image, as an offset in wide
                 pixels from the wide image centre -- the stage navigation error
+
+    absent    : Phase 2 Set C. The reference is rendered with its landmark, but
+                the wide view is rendered from the same layout with the landmark
+                shapes removed -- the same periodic architecture, a different die
+                region where the reference's unique site does not occur. The
+                returned gt is then meaningless (the caller marks it absent).
 
     Returns (ref, wide, gt_xy) with gt in wide-image pixel coordinates,
     fractional and exact: it comes from the placement, never from the image.
@@ -166,7 +172,19 @@ def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
     gt_y = n_px / 2.0 + offset_px[1]
     wide_origin = (target_nm[0] - gt_x * wide_px_nm,
                    target_nm[1] - gt_y * wide_px_nm)
-    wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
+
+    if absent:
+        # Temporarily drop the landmark shapes for the wide render only; the
+        # periodic arrays (the architecture) stay, so the wide is periodically
+        # similar but contains no true instance. Restored immediately after.
+        saved_shapes = layout.shapes
+        layout.shapes = []
+        try:
+            wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
+        finally:
+            layout.shapes = saved_shapes
+    else:
+        wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
 
     assert ref.shape == (n_px, n_px), ref.shape
     assert wide.shape == (n_px, n_px), wide.shape

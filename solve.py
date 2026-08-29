@@ -28,10 +28,18 @@ Phase 4 (this version): subpixel refinement -- fit a parabola to the three
 from __future__ import annotations
 
 import numpy as np
+from PIL import Image
 from scipy.signal import fftconvolve
 from scipy.ndimage import gaussian_filter, rotate as ndrotate, maximum_filter
 
-SCALE = 10          # wide is 10 nm/px, reference 1 nm/px -> known 10x gap
+SCALE = 10          # wide is 10 nm/px, reference 1 nm/px -> known 10x gap (Phase 1)
+
+# Phase 2: the zoom ratio is unknown in [8, 12]. When `locate(..., scales=...)`
+# is given a grid, the reference is resampled to each candidate scale and the
+# best-correlating one is kept and reported. This coarse grid is refined locally
+# afterwards (golden section) to reach the tight pose-recovery tiers. Default
+# (scales=None) keeps the exact fixed-SCALE Phase 1 path, byte-for-byte.
+PHASE2_SCALES = tuple(float(s) for s in np.arange(8.0, 12.0001, 0.5))
 
 # Multi-match tie-break, as a soft centre prior rather than a hard threshold.
 # Repeated landmarks sit >=100 px apart, so peaks are enumerated with an 80 px
@@ -53,6 +61,14 @@ LAMBDA = 0.08
 BLURS = (0.0, 1.0, 2.0, 3.0)
 ANGLES = (-4.0, -2.0, 0.0, 2.0, 4.0)
 
+# During the scale search, scale is ranked with a single cheap variant rather
+# than the full blur x angle grid: mismatched blur/angle penalise every scale
+# candidate about equally, so the correct scale still wins the ranking, and the
+# real blur/angle are recovered once at the chosen scale. This keeps the scale
+# search inside the CPU runtime budget (measured ~5x faster, same accuracy).
+SCAN_BLURS = (0.0,)
+SCAN_ANGLES = (0.0,)
+
 
 def downsample(img: np.ndarray, factor: int = SCALE) -> np.ndarray:
     """Shrink a square image by an integer factor by block-averaging.
@@ -64,6 +80,27 @@ def downsample(img: np.ndarray, factor: int = SCALE) -> np.ndarray:
     n = img.shape[0] // factor
     img = img[: n * factor, : n * factor].astype(np.float64)
     return img.reshape(n, factor, n, factor).mean(axis=(1, 3))
+
+
+def _resize_box(img: np.ndarray, tgt_px: int) -> np.ndarray:
+    """Area-average (BOX) resample of a square image to tgt_px x tgt_px.
+
+    BOX averaging matches the wide detector's block integration -- the same
+    physical operation the integer `downsample` performs, but at a fractional
+    ratio. Used for the Phase 2 scale search, where the zoom is not an integer.
+    """
+    im = Image.fromarray(np.asarray(img, dtype=np.float32), mode="F")
+    im = im.resize((int(tgt_px), int(tgt_px)), Image.BOX)
+    return np.asarray(im, dtype=np.float64)
+
+
+def _stamp_at_scale(reference: np.ndarray, scale: float) -> np.ndarray:
+    """The reference as it appears at the wide view's pixel size.
+
+    The reference is 1 nm/px; the wide is `scale` nm/px, so the reference's
+    field occupies reference_size / scale pixels in the wide view.
+    """
+    return _resize_box(reference, int(round(reference.shape[0] / scale)))
 
 
 def ncc_map(image: np.ndarray, template: np.ndarray) -> np.ndarray:
@@ -121,13 +158,14 @@ def _denom_image(img, tshape):
 
 
 def _best_variant(image, stamp, blurs, angles):
-    """Search all (blur, angle) on `image`; return the winning (blur, angle).
+    """Search all (blur, angle) on `image`; return (blur, angle, peak_value).
 
-    Only the *setting* is taken from here -- the precise location is redone at
-    full resolution afterwards. All variants share the image and the template
-    shape, so the denominator's image side (two of the three FFTs per variant)
-    is computed once up front; each variant then costs a single correlation.
-    Numerically identical to calling ncc_map per variant, ~2-3x fewer FFTs.
+    Only the *setting* and its peak NCC are taken from here -- the precise
+    location is redone at full resolution afterwards. All variants share the
+    image and the template shape, so the denominator's image side (two of the
+    three FFTs per variant) is computed once up front; each variant then costs a
+    single correlation. The peak value is returned so a scale search can rank
+    stamps of different sizes against each other.
     """
     img = image.astype(np.float64)
     denom_img = _denom_image(img, stamp.shape)      # shared across all variants
@@ -145,7 +183,16 @@ def _best_variant(image, stamp, blurs, angles):
             val = float(out.max()) if out.size else -np.inf
             if val > best_val:
                 best_val, best = val, (sig, ang)
-    return best
+    return best[0], best[1], best_val
+
+
+def _coarse_peak(cw, stamp_full, blurs, angles):
+    """Peak NCC of a full-res stamp against the half-res wide, plus its best
+    (blur, angle). The stamp is resized to half so its pixel size matches cw
+    (which is the wide block-averaged by 2). Used to rank scale candidates."""
+    cs = _resize_box(stamp_full, max(4, stamp_full.shape[0] // 2))
+    sig_c, ang, val = _best_variant(cw, cs, tuple(b / 2 for b in blurs), angles)
+    return val, sig_c * 2.0, ang
 
 
 def _select_peak(score, h, w, n_px, center_rule, nms=NMS_SIZE, lam=LAMBDA):
@@ -173,24 +220,93 @@ def _select_peak(score, h, w, n_px, center_rule, nms=NMS_SIZE, lam=LAMBDA):
     return ys[k], xs[k]
 
 
+def _refine_scale(cw, reference, s0, step, blurs, angles, iters=4):
+    """Golden-section refine of the zoom around a coarse winner s0 +/- step.
+
+    Maximises the half-res peak NCC as a function of scale. A handful of
+    iterations narrows the bracket enough to reach the tight scale tiers without
+    a dense full-res grid. Returns (scale, blur, angle) at the refined scale.
+    """
+    invphi = (np.sqrt(5.0) - 1.0) / 2.0            # 0.618...
+    a, b = max(1.0, s0 - step), s0 + step
+    fc = fd = None
+    c = b - invphi * (b - a)
+    d = a + invphi * (b - a)
+    fc = _coarse_peak(cw, _stamp_at_scale(reference, c), blurs, angles)
+    fd = _coarse_peak(cw, _stamp_at_scale(reference, d), blurs, angles)
+    for _ in range(iters):
+        if fc[0] >= fd[0]:
+            b, d, fd = d, c, fc
+            c = b - invphi * (b - a)
+            fc = _coarse_peak(cw, _stamp_at_scale(reference, c), blurs, angles)
+        else:
+            a, c, fc = c, d, fd
+            d = a + invphi * (b - a)
+            fd = _coarse_peak(cw, _stamp_at_scale(reference, d), blurs, angles)
+    if fc[0] >= fd[0]:
+        s = c; _, blur, ang = fc
+    else:
+        s = d; _, blur, ang = fd
+    return float(s), float(blur), float(ang)
+
+
+def _fine_score_full(reference: np.ndarray, wide: np.ndarray,
+                     blurs=BLURS, angles=ANGLES, scales=None):
+    """The full-resolution correlation map, stamp geometry, and the recovered
+    (angle, blur, scale).
+
+    Single source of truth; `fine_score` slices it to the historical 4-tuple so
+    existing callers are unchanged, while `locate(return_info=True)` reads the
+    recovered pose for the Phase 2 columns without recomputing the correlation.
+
+    scales=None (default): the fixed-SCALE Phase 1 path, byte-for-byte as before.
+    scales=<iterable>: Phase 2 -- rank each candidate zoom by its half-res peak
+    NCC, refine the winner by golden section, then correlate once at full
+    resolution with the recovered (scale, blur, angle).
+    """
+    n_px = wide.shape[0]
+    cw = downsample(wide, 2)                       # half-res wide, shared
+
+    if scales is None:
+        stamp = downsample(reference, SCALE)       # 1000x1000 -> 100x100
+        cs = downsample(stamp, 2)
+        sig_c, ang, _ = _best_variant(cw, cs, tuple(b / 2 for b in blurs), angles)
+        blur = sig_c * 2
+        scale = float(SCALE)
+    else:
+        scales = list(scales)
+        # coarse: rank each candidate zoom by its half-res peak NCC, using one
+        # cheap variant per scale (see SCAN_BLURS/SCAN_ANGLES)
+        best = None                                # (val, scale)
+        for s in scales:
+            val, _, _ = _coarse_peak(cw, _stamp_at_scale(reference, s),
+                                     SCAN_BLURS, SCAN_ANGLES)
+            if best is None or val > best[0]:
+                best = (val, s)
+        # refine the winning scale locally (bracket = one coarse grid step)
+        gstep = (scales[1] - scales[0]) if len(scales) > 1 else 0.5
+        scale, _, _ = _refine_scale(cw, reference, best[1], gstep,
+                                    SCAN_BLURS, SCAN_ANGLES)
+        # recover the real blur/angle once, at the chosen scale, full grid
+        stamp = _stamp_at_scale(reference, scale)
+        _, blur, ang = _coarse_peak(cw, stamp, blurs, angles)
+
+    # fine pass -- full resolution, recovered setting
+    score = ncc_map(wide, _make_variant(stamp, blur, ang))
+    h, w = stamp.shape
+    return score, h, w, n_px, float(ang), float(blur), float(scale)
+
+
 def fine_score(reference: np.ndarray, wide: np.ndarray,
                blurs=BLURS, angles=ANGLES):
     """The full-resolution correlation map plus stamp geometry.
 
     Split out from locate() so peak selection can be studied (e.g. sweeping the
-    centre-prior strength) without recomputing the expensive correlation.
+    centre-prior strength) without recomputing the expensive correlation. Thin
+    wrapper over `_fine_score_full`; returns the historical 4-tuple.
     """
-    stamp = downsample(reference, SCALE)          # 1000x1000 -> 100x100
-    h, w = stamp.shape
-    n_px = wide.shape[0]
-
-    # coarse pass -- half resolution; blur scales with resolution, angle doesn't
-    cw = downsample(wide, 2)
-    cs = downsample(stamp, 2)
-    sig_c, ang = _best_variant(cw, cs, tuple(b / 2 for b in blurs), angles)
-
-    # fine pass -- full resolution, chosen setting
-    score = ncc_map(wide, _make_variant(stamp, sig_c * 2, ang))
+    score, h, w, n_px, _ang, _blur, _sc = _fine_score_full(reference, wide,
+                                                           blurs, angles)
     return score, h, w, n_px
 
 
@@ -221,18 +337,53 @@ def _subpixel(score, r, c):
     return r + float(np.clip(dy, -1.0, 1.0)), c + float(np.clip(dx, -1.0, 1.0))
 
 
+# Sign convention for the recovered rotation reported in Phase 2's `theta`
+# column (contract: degrees, CCW positive, about the match centre). `ANGLES`
+# are the angles the stamp is rotated by (via scipy ndrotate) to best match the
+# wide view; the wide view's apparent rotation of the reference is the opposite
+# sense. This factor makes the reported sign trivially flippable -- it MUST be
+# validated against the sample pairs' ground-truth theta the moment they land
+# (~29 Aug), since we cannot verify the sense without a labelled example.
+THETA_SIGN = -1.0
+
+
 def locate(reference: np.ndarray, wide: np.ndarray,
            blurs=BLURS, angles=ANGLES, center_rule=True,
-           lam=LAMBDA, subpixel=True) -> tuple[float, float]:
+           lam=LAMBDA, subpixel=True, return_info=False, scales=None):
     """Return (x, y) pixel centre of the reference's site in the wide image.
 
     Coarse-to-fine: pick the best (blur, angle) on a half-size image, then
     correlate once at full resolution with that setting. Among tied peaks the
     centre-most is chosen (the multi-match tie-break); set center_rule=False to
     fall back to plain argmax.
+
+    scales=None (default): the fixed-SCALE Phase 1 path, unchanged. Pass a grid
+    (e.g. PHASE2_SCALES) to also search the unknown [8,12] zoom -- the stamp size
+    then tracks the recovered scale, so x/y stay correct off the nominal 10x.
+
+    With return_info=True, returns (x, y, info) where info carries the Phase 2
+    diagnostics: `score` (peak NCC in [-1, 1], the confidence signal), `theta`
+    (recovered rotation, degrees, CCW-positive per THETA_SIGN), and `scale`
+    (the recovered downscaling factor). The default 2-tuple return is unchanged.
     """
-    score, h, w, n_px = fine_score(reference, wide, blurs, angles)
-    r, c = _select_peak(score, h, w, n_px, center_rule, lam=lam)   # top-left
+    score, h, w, n_px, ang, blur, scale = _fine_score_full(
+        reference, wide, blurs, angles, scales=scales)
+    r, c = _select_peak(score, h, w, n_px, center_rule, lam=lam)   # top-left (ints)
+    peak = float(score[int(r), int(c)])                            # confidence at the peak
     if subpixel:
         r, c = _subpixel(score, r, c)
-    return float(c + w / 2.0), float(r + h / 2.0)   # x = column, y = row
+    x, y = float(c + w / 2.0), float(r + h / 2.0)                  # x = column, y = row
+    if return_info:
+        # Rejection signal: how much the winning peak stands out from the next
+        # distinct peak. On an absent pair the wide is periodic with no unique
+        # landmark, so many peaks tie (ratio -> 1); a present pair's landmark
+        # makes one peak stand proud (ratio < 1). Validated to separate
+        # present/absent far better than the absolute peak (F1 0.96 vs 0.86).
+        lm = score == maximum_filter(score, size=NMS_SIZE)
+        vals = np.sort(score[lm])[::-1]
+        second_ratio = float(vals[1] / vals[0]) if len(vals) > 1 and vals[0] > 0 else 1.0
+        distinct = float(peak * (1.0 - second_ratio))   # gap, scaled by peak height
+        return x, y, {"score": peak, "theta": THETA_SIGN * ang, "scale": scale,
+                      "blur": blur, "second_ratio": second_ratio,
+                      "distinct": distinct}
+    return x, y

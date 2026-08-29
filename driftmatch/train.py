@@ -103,8 +103,16 @@ def main():
         from driftmatch.infer import load_checkpoint
         ck = load_checkpoint(a.resume, map_location=device)
         net.load_state_dict(ck["model"])
-        best = float(ck.get("acc_val", -1.0))
-        print(f"resumed {a.resume}: prev epoch {ck.get('epoch','?')}, held-out {best:.1f}%")
+        # Re-baseline `best` on THIS run's held-out set, not the stale acc_val
+        # stored in the resumed checkpoint. That stored value was measured on a
+        # (possibly different) eval set -- e.g. resuming a fixed-scale Phase 1
+        # net to fine-tune on scale-varied data. Trusting it means no epoch ever
+        # "beats" it and best.pt is never written, silently keeping only last.pt.
+        net.eval()
+        prev = float(ck.get("acc_val", -1.0))
+        best = quick_eval(net, a.eval2, device, n=60)
+        print(f"resumed {a.resume}: prev epoch {ck.get('epoch','?')}, "
+              f"stored acc_val {prev:.1f}%; re-baselined on this held-out set: {best:.1f}%")
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.epochs)
     scaler = torch.amp.GradScaler("cuda", enabled=device == "cuda")

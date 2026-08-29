@@ -287,3 +287,48 @@ One seed per pair drives every draw. `labels.csv` records `pair_id, style, gt_x,
 **Ready to build.** Remaining inputs are yours, not research: target pair count, and teammates.
 
 **Deliberately deferred to v2:** charging artifacts, scan-line streaking, contamination drift between captures. All three are robustness augmentations rather than core physics, and all three have citations already in hand.
+
+*(Update, later than "v2": charging and scan-line streaking were implemented for Phase 1 —
+`driftsense/physics.py: apply_charging`. Contamination drift between captures remains unimplemented.)*
+
+---
+
+## 8. Phase 2 addendum — optical aberrations (29 Aug 2026)
+
+Four parameters were named in §"Pipeline order" (top of `physics.py`'s docstring, itself following
+this document's citation of the NIST ARTIMAGEN paradigm) but never actually implemented — astigmatism,
+barrel distortion, vignetting, gamma. Closed for Phase 2, since Set B ("scan distortion") needs the
+geometric-warp category these represent, and the earlier gap was a real spec-vs-code mismatch, not a
+deliberate deferral like the ones above.
+
+**A framing difference from the rest of this ledger, stated plainly:** the parameters above (edge
+overshoot, Fano factor, LER, pitch tables) are *measured or standards-sourced* values with numeric
+citations. The four below are *standard optical/detector models*, cited to the textbook or classical
+result that defines the model form — not to a paper measuring SEM-specific parameter values, because
+no such measurement was sourced for this generator. The parameter *ranges* (e.g. barrel k1 ∈
+[−0.06, 0.06]) are therefore engineering choices calibrated to produce a visually/quantitatively
+plausible effect size on our own images, not literature-derived numbers, and should be described that
+way if asked, not oversold as measured.
+
+25. **Astigmatism** — modelled as an elliptical (direction-dependent) point-spread function: sharp
+    along one axis, blurred along the perpendicular one, set by an aberration angle. This is the
+    standard electron-optical astigmatism model described in Goldstein et al., *Scanning Electron
+    Microscopy and X-Ray Microanalysis*, 4th ed., Springer, 2018 (the standard SEM reference text;
+    astigmatism as an uncorrected stigmator error producing elliptical probe shape).
+26. **Barrel / pincushion distortion** — single-term radial model, `r' = r(1 + k1·(r/r_max)²)`. This
+    is the classical Brown–Conrady radial lens-distortion model: Brown, D.C., *Decentering Distortion
+    of Lenses*, Photogrammetric Engineering, 1966. Applied here as a generic raster-scan geometric
+    nonlinearity (magnetic/electrostatic scan-coil nonlinearity is the SEM-specific analogue of lens
+    distortion), not because a specific SEM instrument's k1 was measured.
+27. **Vignetting** — quadratic radial intensity falloff toward the corners, modelling reduced
+    detector/collection solid-angle away from the optical axis. Modelled generically (not the
+    photographic cos⁴ law, which assumes a different aperture geometry than an SEM secondary-electron
+    detector); no SEM-specific vignetting-profile citation is claimed.
+28. **Gamma** — a power-law intensity transform, `I_out = I_in^gamma`, modelling detector/amplifier
+    non-linearity. Standard detector-response model; no specific SEM amplifier curve is cited.
+
+**Ground-truth handling under these warps** (relevant to citation 17, repetitive-pattern localization,
+above): barrel distortion moves the landmark's *apparent position*, so the label must be shifted by
+the same forward map applied to the pixels — implemented and the sign convention verified empirically
+(not derived-and-trusted) against a synthetic test with a known landmark location. See
+`docs/PHASE2_RESEARCH_NOTES.md` for the validation numbers.

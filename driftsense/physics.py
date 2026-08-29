@@ -61,6 +61,15 @@ class CaptureParams:
     drift_nm: float = 0.0          # total stage creep across one frame
     drift_angle_deg: float = 0.0
     vibration_nm: float = 0.0      # rms per-scanline displacement
+    scan_distortion_px: float = 0.0  # peak amplitude of the smooth scan-distortion
+                                     # warp field, in wide pixels (Phase 2 Set B)
+    # Optical aberrations disclosed for Set B ("scan distortion") but not
+    # previously implemented -- Phase 2 additions, all gated off by default.
+    astig_extra_sigma_nm: float = 0.0   # extra blur along the astigmatism axis
+    astig_angle_deg: float = 0.0        # axis of the elongation
+    barrel_k1: float = 0.0              # radial lens distortion coefficient
+    vignette_strength: float = 0.0      # 0 = none, ~0.3 = visible corner falloff
+    gamma: float = 1.0                  # intensity gamma; 1.0 = no change
     # charging
     charging: float = 0.0          # 0 = none; grey-level scale of the field
     charging_scale_nm: float = 400.0
@@ -207,6 +216,103 @@ def apply_optics(img: np.ndarray, p: CaptureParams) -> np.ndarray:
     return ndi.gaussian_filter(img, sigma_px, mode="nearest")
 
 
+def apply_astigmatism(img: np.ndarray, p: CaptureParams) -> np.ndarray:
+    """Elliptical (direction-dependent) blur along `astig_angle_deg`.
+
+    A real electron probe with uncorrected astigmatism is an ellipse, not a
+    disc: it is sharp along one axis and smeared along the perpendicular one.
+    Rendered as a rotated anisotropic Gaussian -- a small kernel is built with
+    two different sigmas along its own axes, rotated to the sample angle, and
+    convolved once. Additive with the existing (isotropic) probe/defocus blur.
+    """
+    if p.astig_extra_sigma_nm <= 0:
+        return img
+    sig_min = max(0.3, p.probe_sigma_nm / p.px_nm)      # the sharp axis: near-native
+    sig_maj = sig_min + p.astig_extra_sigma_nm / p.px_nm  # the smeared axis
+    r = int(np.ceil(4 * sig_maj))
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1].astype(np.float32)
+    th = np.radians(p.astig_angle_deg)
+    ca, sa = np.cos(th), np.sin(th)
+    u = xx * ca + yy * sa            # sharp axis
+    v = -xx * sa + yy * ca           # smeared axis
+    kernel = np.exp(-0.5 * ((u / sig_min) ** 2 + (v / sig_maj) ** 2))
+    kernel /= kernel.sum()
+    return ndi.convolve(img, kernel, mode="nearest")
+
+
+def apply_vignette(img: np.ndarray, p: CaptureParams) -> np.ndarray:
+    """Radial intensity falloff toward the corners (detector solid-angle drop).
+
+    Multiplicative quadratic falloff normalised so the centre is unchanged and
+    the corner is dimmed by `vignette_strength`. Cheap, no coordinate change.
+    """
+    if p.vignette_strength <= 0:
+        return img
+    h, w = img.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    r2 = ((yy - cy) / cy) ** 2 + ((xx - cx) / cx) ** 2   # 0 at centre, ~2 at corner
+    falloff = 1.0 - p.vignette_strength * np.clip(r2 / 2.0, 0.0, 1.0)
+    return img * falloff
+
+
+def apply_gamma(img: np.ndarray, p: CaptureParams) -> np.ndarray:
+    """Detector/amplifier intensity gamma. img is expected in [0, 255]-ish grey."""
+    if abs(p.gamma - 1.0) < 1e-6:
+        return img
+    x = np.clip(img, 0.0, 255.0) / 255.0
+    return np.power(x, p.gamma) * 255.0
+
+
+def barrel_displacement_at(x, y, shape, k1: float):
+    """Forward barrel/pincushion displacement (dx, dy) at image point (x, y).
+
+    Standard single-term radial model: r' = r * (1 + k1 * (r/r_max)^2), about
+    the image centre. Analytic and exact -- used both to warp the image (via
+    the inverse map) and to shift the ground-truth coordinate consistently, so
+    no lookup-field rounding error enters the label the way a numeric field
+    would. Positive k1 = barrel (corners pulled in); negative = pincushion.
+    """
+    h, w = shape
+    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    r_max = float(np.hypot(cx, cy))
+    dxp, dyp = x - cx, y - cy
+    r = np.hypot(dxp, dyp)
+    scale = 1.0 + k1 * (r / r_max) ** 2
+    xp, yp = cx + dxp * scale, cy + dyp * scale
+    return xp - x, yp - y
+
+
+def apply_barrel_distortion(img: np.ndarray, k1: float) -> np.ndarray:
+    """Warp `img` by the forward barrel map. Ground truth must be shifted by
+    barrel_displacement_at() at the landmark to stay consistent (see caller)."""
+    if k1 == 0:
+        return img
+    h, w = img.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    # To PRODUCE a forward-warped image, sample the input at the INVERSE map:
+    # out(x,y) = in(x - dx(x,y), y - dy(x,y)) is only exact for small k1, so
+    # instead invert the analytic radial map directly (closed-form for this
+    # single-term model) for an exact resample.
+    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    r_max = float(np.hypot(cx, cy))
+    dxp, dyp = xx - cx, yy - cy
+    rp = np.hypot(dxp, dyp) / r_max
+    # invert scale' = 1 + k1*r_src^2 numerically per-pixel (cubic in r_src) via
+    # one Newton step from r_src = rp -- k1 is small (<=~0.06) so this converges
+    # to float32 precision in a single step for this problem's range.
+    r_src = rp.copy()
+    for _ in range(3):
+        f = r_src * (1.0 + k1 * r_src ** 2) - rp
+        fp = 1.0 + 3.0 * k1 * r_src ** 2
+        r_src -= f / np.where(np.abs(fp) > 1e-6, fp, 1e-6)
+    scale = np.where(rp > 1e-6, r_src / np.maximum(rp, 1e-6), 1.0)
+    src_x = cx + dxp * scale
+    src_y = cy + dyp * scale
+    return ndi.map_coordinates(img.astype(np.float32), [src_y, src_x],
+                               order=1, mode="nearest")
+
+
 def apply_scan_artefacts(img: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
     """Drift shear and vibration.
 
@@ -235,6 +341,42 @@ def apply_scan_artefacts(img: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
         out = ndi.map_coordinates(out, [rows, cols + jitter[:, None]],
                                   order=1, mode="nearest")
     return out
+
+
+def scan_distortion_field(shape, mag_px: float, rng):
+    """A smooth, low-frequency 2-D displacement field, peak amplitude ~mag_px.
+
+    Models SEM scan distortion: the beam's actual raster position drifts smoothly
+    and nonlinearly from the commanded grid, warping the image by a few pixels in
+    a way a rigid template cannot absorb but a learned matcher can. Built from a
+    couple of low-frequency sinusoids so it is smooth and analytically evaluable
+    at any point (needed to keep the ground-truth coordinate exact under the warp).
+
+    Returns (dx, dy) float32 arrays the size of `shape`.
+    """
+    h, w = shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    xn, yn = xx / w, yy / h
+    dx = np.zeros((h, w), np.float32)
+    dy = np.zeros((h, w), np.float32)
+    for _ in range(2):
+        fx, fy = rng.uniform(0.5, 1.5, 2)
+        ph = rng.uniform(0, 2 * np.pi, 4)
+        ax, ay = rng.uniform(-1, 1, 2)
+        dx += ax * np.sin(2 * np.pi * fx * xn + ph[0]) * np.cos(2 * np.pi * fy * yn + ph[1])
+        dy += ay * np.cos(2 * np.pi * fx * xn + ph[2]) * np.sin(2 * np.pi * fy * yn + ph[3])
+    m = float(max(np.abs(dx).max(), np.abs(dy).max(), 1e-6))
+    dx *= mag_px / m
+    dy *= mag_px / m
+    return dx, dy
+
+
+def apply_scan_distortion(img: np.ndarray, dx, dy) -> np.ndarray:
+    """Warp `img` by a displacement field: out(r,c) = img(r+dy, c+dx)."""
+    h, w = img.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    return ndi.map_coordinates(img.astype(np.float32), [yy + dy, xx + dx],
+                               order=1, mode="nearest").astype(np.float32)
 
 
 def add_shot_noise(img: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
@@ -266,12 +408,22 @@ def quantize(img: np.ndarray) -> np.ndarray:
 
 
 def render(material: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
-    """Full image-formation chain for one capture."""
+    """Full image-formation chain for one capture.
+
+    Phase 2 additions (astigmatism, barrel, vignette, gamma) are placed after
+    the geometric/blur stages and before noise -- the order a real detector
+    chain would apply them (optics, then intensity, then noise) -- and are all
+    no-ops unless their CaptureParams field is set, so Phase 1 is unaffected.
+    """
     x = material.astype(np.float32)
     x = edge_response(x, p)
     x = apply_charging(x, p, rng)
     x = apply_optics(x, p)
+    x = apply_astigmatism(x, p)
+    x = apply_barrel_distortion(x, p.barrel_k1)
     x = apply_scan_artefacts(x, p, rng)
+    x = apply_vignette(x, p)
+    x = apply_gamma(x, p)
     x = add_shot_noise(x, p, rng)
     x = add_read_noise(x, p, rng)
     return quantize(x)

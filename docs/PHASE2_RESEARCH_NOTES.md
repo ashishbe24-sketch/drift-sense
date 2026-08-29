@@ -1,0 +1,532 @@
+# Phase 2 — Implementation Research Notes
+
+Quick research pass against the two hardest open problems in
+[PHASE2_UNDERSTANDING.md](PHASE2_UNDERSTANDING.md) §7, done against a tight token budget — this is
+findings + a recommended path, not finished code. Also re-verified the exact current code (`solve.py`,
+`route.py`, `infer.py`) so the plan below is grounded in what actually exists today, not the README's
+prose description of it.
+
+---
+
+## What the current code actually does (re-confirmed by reading it, not the README)
+
+- **`solve.py`**: `SCALE = 10` is hardcoded — `downsample()` always divides by exactly 10. The
+  existing search is **blur × angle only**: `BLURS = (0,1,2,3)` px × `ANGLES = (-4,-2,0,2,4)°` = 20
+  variants, coarse pass at half-resolution picks the winning (blur, angle), then one full-res
+  correlation at that setting. Sub-pixel refinement (parabola fit) is applied to **(x, y) only** —
+  there is no angle or scale refinement at all right now.
+- **`route.py`**: `is_multimatch()` already computes something adjacent to what rejection needs —
+  it reads the heatmap's top-2 peak ratio via `maximum_filter` + NMS. That machinery is reusable.
+  `locate()` returns `(x, y)` only; no scale, theta, found, or score anywhere in the return path.
+- **`infer.py`**: `predict()` returns `(x, y)`; this is the function `register.py` needs to wrap
+  and extend, not replace.
+
+So the honest gap is exactly what §7 said: scale search, angle *precision*, found, and score are
+all genuinely missing, not just unexposed.
+
+---
+
+## Problem 1: recovering scale ∈ [8,12] and refining theta to ≤0.25–0.5° precision
+
+**Option A — extend the existing brute-force grid (lowest-risk, smallest diff).**
+`_best_variant()` already loops blur × angle; add a scale axis: e.g. 5 scale samples ×
+5 angle samples × 4 blur = 100 variants at the coarse (half-res) pass — 5× the current 20, still
+cheap because the coarse pass is on a 500×500 image. Take the winning (scale, angle, blur) from
+the coarse grid, then do a **local refinement** around it — a small Nelder-Mead or coordinate-descent
+step in (scale, angle) using the fine-resolution NCC as the objective, the same way `_subpixel()`
+already refines (x,y) via a local parabola. This is the natural extension of code that already
+exists and ships in `solve.py` today; no new dependency, no retraining risk.
+
+**Option B — Fourier-Mellin Transform (FMT) / log-polar correlation**, the textbook answer to
+"recover unknown rotation+scale between two images in one shot." Log-polar remapping turns
+rotation and scale into pure translations, solvable by a single phase correlation instead of a
+grid search. Two existing OpenCV/Python reference implementations:
+- [yycho0108/LogPolarFFTTemplateMatcher](https://github.com/yycho0108/LogPolarFFTTemplateMatcher)
+- [Smorodov/LogPolarFFTTemplateMatcher](https://github.com/Smorodov/LogPolarFFTTemplateMatcher)
+
+**Refinement method, confirmed by research:** golden-section search / coordinate descent (optimize
+one parameter axis at a time, cycling) is the standard lightweight technique for exactly this —
+refining a small number of continuous parameters (here: scale, angle) around a good coarse
+estimate, using the correlation value itself as the objective. This is a much smaller addition
+than a full Nelder-Mead simplex and fits directly on top of the existing `_subpixel()`-style
+parabola-fit pattern already in `solve.py`. ([Golden-Section variant of Nelder-Mead, Springer](https://link.springer.com/article/10.1023/A:1014842520519),
+[Nelder-Mead method overview](https://en.wikipedia.org/wiki/Nelder%E2%80%93Mead_method))
+
+**Recommendation:** treat Option A as the MVP (small diff, directly extends code we already have
+and understand, no new failure surface) and Option B as a stretch/fallback if Option A's grid
+search is too slow on the CPU-only reference machine or doesn't hit the tight pose tiers. Do **not**
+start with FMT — given the "materially different from Phase 1" disqualification rule, swapping the
+whole matching core for a log-polar pipeline is exactly the kind of change that rule is aimed at;
+extending the existing NCC grid is defensibly "the same method."
+
+For `driftmatch/`: the net currently assumes a fixed-ratio 100×100 reference crop (i.e. pre-downsampled
+by exactly 10× before it ever reaches the network). The equivalent extension is to **resample the
+reference at a few hypothesized scales before feeding the net** (cheap, no retraining) as a first
+pass, with retraining on the wider scale/rotation range as the higher-effort follow-up if the
+resample-only approach doesn't generalize.
+
+---
+
+## Problem 2: the `found` rejection flag + `score` confidence column
+
+Confirmed via research: the standard technique here is **Peak-to-Sidelobe Ratio (PSR)** — the gap
+between the top correlation peak and the surrounding sidelobe/second-peak statistics, used in
+tracking literature specifically to decide "is this actually a match or not," and noted as more
+robust than a flat absolute-correlation threshold. `route.py`'s `is_multimatch()` already computes
+the top-2-peak ratio — extending it to a rejection decision is a small step, not new machinery:
+
+1. Compute the same top-peak-value + second-peak-ratio signal already used for `is_multimatch()`.
+2. Calibrate an absolute-value threshold (not just the ratio) on our **own regenerated dataset**
+   with absent pairs included (per §7 item 8 — we don't have any absent pairs to calibrate against
+   yet), optimizing F1 the way the rubric scores it.
+3. Use the same signal (or the raw peak value) as the `score` column directly — it's already
+   monotonic with match quality, which is all the confidence-calibration scoring requires.
+
+This is the cheapest of the open problems: no new search dimension, just a threshold to fit once
+absent-pair data exists.
+
+**Calibration methodology, confirmed by research (open-set recognition literature):** the standard
+approach is precisely what we already planned — build a validation set containing *both* known
+(present) and unknown (absent) examples, then sweep the threshold to maximize an open-set metric
+like AUROC or OSCR, rather than picking a threshold analytically. This validates step 2 above as
+methodologically sound, not just a reasonable guess — but it also confirms we cannot skip
+regenerating the dataset with absent pairs first, since there is no way to calibrate a rejection
+threshold without labeled negative examples to sweep against.
+([Open Set Recognition Mechanisms overview](https://www.emergentmind.com/topics/open-set-recognition-mechanisms),
+[Learning for Transductive Threshold Calibration in Open-World Recognition, arXiv 2305.12039](https://arxiv.org/pdf/2305.12039))
+
+---
+
+## Priority order given the above (unchanged from before, now more concrete)
+
+1. **CPU-only latency benchmark** — still first; determines whether Option A's grid search (now
+   5× larger) is even affordable within the 5s median / 20s hard cap on a no-GPU 4-core machine.
+   **When benchmarking, sweep `torch.set_num_threads(1..4)` (and `set_num_interop_threads`) as a
+   variable, not just GPU-vs-CPU** — for small models, more threads can be *slower* due to
+   oversubscription; `torch.set_num_threads(1)` is a commonly reported fix, not just a fallback.
+   ([Optimizing PyTorch Model Inference on CPU](https://towardsdatascience.com/optimizing-pytorch-model-inference-on-cpu/),
+   [PyTorch CPU threading docs](https://docs.pytorch.org/docs/stable/notes/cpu_threading_torchscript_inference))
+   **Safety net if thread-tuning alone isn't enough:** PyTorch's x86 INT8 dynamic quantization
+   backend reports ~3x geomean CPU speedup over FP32 across common model types, with negligible
+   accuracy loss — a `torch.quantization.quantize_dynamic()` one-liner is worth trying on
+   `DriftMatchNet` before considering anything more invasive (pruning, distillation, architecture
+   changes) if the plain-FP32 CPU benchmark comes in close to the 5s budget.
+   ([PyTorch INT8 quantization for x86 CPU](https://pytorch.org/blog/int8-quantization/),
+   [Intel: X86 quantization backend](https://www.intel.com/content/www/us/en/developer/articles/technical/accelerate-pytorch-int8-inf-with-new-x86-backend.html))
+2. **`register.py` I/O wrapper** — mechanical, unblocks testing everything else end-to-end early.
+3. **Regenerate our dataset** with scale/rotation ranges + absent pairs (blocks both Problem 1's
+   refinement tuning and Problem 2's threshold calibration — nothing to tune against without it).
+4. **Scale+angle grid extension in `solve.py`** (Option A above).
+5. **Rejection threshold + score column in `route.py`**.
+6. **`driftmatch/` scale-resample + retrain**, if time remains after 1–5.
+
+---
+
+## Implementation progress
+
+**Item 2 — `register.py` skeleton: DONE and validated end-to-end (28 Aug).**
+
+- `register.py` created: exact `--input/--output` CLI, reads pairs.csv (flexible column-name
+  detection until the real sample lands), writes the 6-column contract, one row per pair_id in
+  input order, wraps each pair in try/except so a failing pair is written as `found=0` rather than
+  dropped (a missing row scores zero — a zeroed row is strictly safer).
+- `route.predict_full() -> PairResult` added as the single six-field prediction function;
+  `register.py` is a pure I/O shell over it, so upgrading the matcher never touches the contract.
+- `solve.py` extended backward-compatibly: new `_fine_score_full` surfaces the recovered
+  (angle, blur); `fine_score` stays a 4-tuple wrapper (sweep_lambda unaffected); `locate` gains an
+  opt-in `return_info=True` returning `{score, theta, scale, blur}` with the default 2-tuple return
+  unchanged (all 6 existing callers verified intact).
+- Validated on `curated30`: 30/30 pairs, x/y sub-pixel accurate (e.g. C00 pred 559.9,470.0 vs gt
+  560,470), `score` = peak NCC (0.89–0.99 on these clean pairs), `found`/`scale` correct.
+
+**Field status in the current skeleton** (what is real vs. placeholder):
+
+| Field | Status |
+|---|---|
+| `x`, `y` | **Real, strong** — sub-pixel, from the existing classical matcher. |
+| `score` | **Real** — peak NCC, a genuine monotonic confidence signal. |
+| `found` | **Mechanism real, threshold provisional** — `FOUND_THRESHOLD = 0.30` in `route.py`, must be recalibrated on regenerated absent pairs (item 5). |
+| `scale` | **Placeholder = 10.0** — the fixed `SCALE`, correct only because curated30 is fixed-10×. Needs the [8,12] scale search (item 4). |
+| `theta` | **Surfaced but currently unreliable** — *finding:* on C00 (gt rotation 1.8°) the matcher reported 0.0°. The existing angle grid is 2° steps (`ANGLES = -4,-2,0,2,4`), too coarse to resolve <2° and it snaps to 0. This is direct evidence for the rotation-precision half of item 4: the grid needs finer sampling **plus** the golden-section/coordinate-descent refinement (Problem 1) to reach the ≤0.25°/0.5° pose tiers. Also: `THETA_SIGN` in `solve.py` is an unverified guess — must be checked against sample-pair ground-truth theta the moment it lands (~29 Aug). |
+
+**Immediate next task: item 4** — extend `solve.py` to (a) search scale over [8,12] and (b) sample
+angle finely + refine, then feed both recovered values into `return_info`. This directly fixes the
+`scale` placeholder and the `theta` finding above, and is the prerequisite for the pose-recovery
+20 pts. Item 3 (dataset regeneration) can proceed in parallel and is the gate for item 5.
+
+**Items 3 (scale half) + 4 (scale search): DONE and validated (overnight, 28 Aug).**
+
+- *Generator (item 3, scale + signed-rotation sampling):* `sample_spec` gained gated
+  `scale_range` and `signed_rotation` params; `generate_dataset.py` gained `--phase2` /
+  `--scale-range`. Both **default-off, so Phase 1 datasets stay byte-identical** (verified: seed
+  7000 still scale=10.0, unsigned rotation). Zoom is now plumbed through `generate_one` →
+  `make_pair(wide_px_nm=spec.wide.px_nm)`, so the rendered pixels match the recorded `scale`
+  column (new). Signed-rotation *sampling* is in, but note it rotates the whole layout (ref+wide
+  together) — it does NOT yet create *relative* rotation between ref and wide, which is what
+  `theta` recovery needs (see rotation note below).
+- *Why this was the top priority — measured, not assumed:* on a fresh 12-pair varying-zoom set,
+  the old fixed-`SCALE=10` solver had **3/12 catastrophic localization failures** (570px, 390px,
+  88px) → only 75% within 5px. Scale mismatch degrades the true peak until a periodic decoy wins.
+  So scale search protects the **40-pt localization score**, not just the 10-pt scale score.
+- *Solver (item 4):* `solve.py` gained an opt-in `scales=` path (default `None` = exact Phase 1
+  behaviour, byte-verified on curated30 C00). It resamples the reference to each candidate zoom
+  (`_stamp_at_scale`, BOX area-average to match the detector), ranks scales by half-res peak NCC
+  with a single cheap variant (`SCAN_BLURS/SCAN_ANGLES`), golden-section-refines the winner
+  (`_refine_scale`, the technique from Problem 1), then recovers blur/angle once at the chosen
+  scale. `_best_variant` now also returns the peak value (to rank scales); `_fine_score_full`
+  returns the recovered scale; all existing 4-tuple/2-tuple callers preserved.
+- *Result on the 12-pair set:* within-5px **75% → 83%**, median scale error **4.1% → 1.0%**
+  (50% within the 1% tier, 67% within 2%), at **1.33 s/pair** (was 5.25s before the
+  single-variant scan optimization) — inside the 5 s CPU median budget with headroom. The classical
+  path is already CPU-only numpy/scipy, so this timing is representative of the no-GPU grader.
+- `route.predict_full` now always passes `PHASE2_SCALES`, so `register.py`'s `scale` column is
+  real. Validated end-to-end: 12/12 pairs, scale recovered per-pair.
+
+**Item 3 (absent pairs) + item 5 (rejection): DONE and validated (overnight, 28 Aug).**
+
+- *Generator:* `make_pair(absent=True)` renders the wide from the same layout with the landmark
+  shapes removed (periodic architecture kept, unique site gone) — "a different die region of the
+  same architecture", exactly the Set C spec. `sample_spec(absent=True)` marks `present=0` and a
+  -1 gt sentinel; `generate_dataset.py --absent-fraction` decides absent per-seed deterministically.
+  New `present` column in the manifest.
+- *The calibration story (and a reversal worth recording).* First tried on an 18-pair set:
+  `distinct = peak * (1 - second_peak_ratio)` (how much the winning peak stands out) beat raw peak
+  NCC (F1 1.0 vs 0.86), so `found` was wired to `distinct`. **Then re-validated on a larger, harder
+  60-pair set (16 absent, more aliased/multi-match present pairs) and the result reversed:** raw
+  **peak NCC won, F1 0.925 vs 0.854 for distinct.** The reason is instructive — a *present-but-
+  periodic* pair still has a strong landmark peak (high raw peak) but low distinctiveness (its
+  decoys tie it), so `distinct` conflates "absent" with "present-and-periodic", which is exactly
+  the Set C trap ("a different die region of the same architecture"). Raw peak does not conflate
+  them. **Lesson: the 18-pair F1 1.0 was a small-sample artifact; always calibrate rejection on a
+  large, hard, aliased-heavy set.** `found` now thresholds raw peak (`FOUND_PEAK = 0.70`, robust
+  across 0.67-0.73), and peak doubles as the `score` confidence. `solve.locate` still returns
+  `distinct`/`second_ratio` in case they help a future multi-match refinement.
+- *End-to-end on the 60-pair set (`register.py`, corrected):* rejection **F1 0.925**
+  (TP 43, FP 6, FN 1, TN 10), localization on found-present **81% within 5px, median 0.55px**,
+  scale error median **0.62%**. Honest numbers on a hard mixed set; the 6-column contract writes
+  correctly, absent pairs get found=0 with zeroed pose.
+- *Caveat:* still our own generator, not the organizers'. FOUND_PEAK is provisional — recalibrate
+  on their data, and the operating point may shift once Q2 (rejection-F1 positive class) is known.
+
+**Field status now:** x/y — real, strong (80% @5px on a hard set). scale — **real, recovered**
+(median err 0.62%). found — **real, peak-thresholded, F1 0.925** (provisional threshold). score —
+peak NCC. theta — still 0 (rotation deferred, below).
+
+**Item 6 (net) — DECISION REVERSED (29 Aug): the net stays; do NOT ship classical-only.**
+
+The 28 Aug "classical-only" call below was wrong because it judged the net on OUR generator's data.
+Correcting it with the decisive evidence: **on the ORGANIZERS' own data (Phase 1 overnight log,
+300 pairs), the net router scored 84% @5px vs classical's 56%** (DriftRoute vs DriftFind). Classical
+alone craters on their domain. Since the organizers evaluate on THEIR data, the net is essential,
+not optional. Two root causes were then found for why our data misled us:
+  1. **Our generator lacks geometric warps** (barrel / scan distortion / astigmatism) — it models
+     only drift-shear + vibration + blur + noise + charging (grep of physics.py). The net's whole
+     edge is absorbing warps NCC can't; with no warps in our data, the net shows no advantage here
+     AND can't learn the skill. The organizers' Set B explicitly lists "scan distortion" — a warp we
+     do not model. This is a real generator gap (also costs dataset-realism credit).
+  2. **The net needs scale handling.** Best approach measured: classical estimates scale (0.62% err)
+     → resample the reference to that scale → net localizes once at the correct scale (one CPU pass,
+     ~2.35s, within budget). Tested on our (warp-free) data it is 71% vs classical 87% — but our data
+     is exactly the wrong test (no warps). On warped/organizer-like data the Phase 1 result says the
+     net wins big.
+
+**Corrected plan:** (a) add scan distortion to the generator [DONE], (b) retrain the net on
+scale+warp data (warm-start) [running], (c) ship the router with the scale-hybrid (classical scale →
+net at that scale, classical for multi-match + scale + rejection). This is the Phase 1 router,
+extended for scale — rules-compliant. The text below is kept for the record but superseded.
+
+**Progress on the corrected plan (29 Aug):**
+- *(a) Scan distortion added to the generator — DONE, validated.* `physics.py` gains
+  `scan_distortion_field` (smooth low-frequency 2-D warp, peak amplitude in px) + `apply_scan_distortion`.
+  Sampled for the **wide capture only** (a *relative* warp ref↔wide — the thing NCC can't absorb),
+  gated so Phase 1 stays byte-identical (verified seed 7000 → scan_dist 0.0). `generate_dataset.py`
+  `--phase2` now also enables it (max 6 px); `--scan-distortion` sets it explicitly; new
+  `wide_scan_distortion_px` manifest column. **Ground truth stays exact under the warp:** the wide is
+  warped and the label is shifted by the field's value at the landmark (validated — a pair with 5.1px
+  distortion still localizes to 0.5px, i.e. gt follows the warp). And it does break classical as
+  intended — a 3.9px-distortion pair gave classical a confident-but-wrong 348px miss, the exact case
+  the net should win. This also fills the Set B "scan distortion" requirement (dataset-realism credit).
+- *Model check:* `xcorr_depthwise` pads by `Hk//2`, so the heatmap is always 250×250 regardless of
+  reference size → scale-correct (variable-footprint) references need NO model change, available for a
+  later refinement if scale-tolerant training caps out.
+- *(b) Warped training — running.* Regenerated 4000 warped+scale training pairs + warped eval sets;
+  fine-tuning from Phase 1 `best.pt` (14 ep, scale-tolerant first — minimal change, warps are the key
+  new ingredient). Checkpoint → scratch `p2ckptw/`; Phase 1 `best.pt` untouched. Once done: compare
+  net vs classical vs router ON WARPED data (where classical is weak) to confirm the net earns its place.
+- *`train.py` resume-baseline bug fixed earlier* still applies — the run re-baselines `best` on the
+  current eval set.
+
+**Warped fine-tune result + final architecture decision (29 Aug):**
+- Fine-tune completed (after two crashes fixed: GPU OOM → batch 2; host-RAM OOM → `--limit 2500`).
+  Best held-out on WARPED eval **81.7%** (resumed from a 76.7% partial). Checkpoint: scratch
+  `p2ckptw/best.pt`; Phase 1 `best.pt` untouched.
+- *Decisive eval, 113 warped solvable present pairs, net-at-classical-scale vs classical vs router:*
+  classical **85%** ALL / **86%** on distorted; net@scale 76%/82%; router 79%/80%. **On OUR data,
+  classical wins even on distorted pairs.**
+- *But our data under-represents the grading domain.* Our single scan-distortion warp is milder than
+  the organizers' warp set (astigmatism + barrel + corner-rounding + linewidth-bias), which on their
+  Phase 1 data dropped classical to 56% while the net router hit 84% — a 28-pt gap on the domain they
+  actually grade, and the approach that got us selected. ds_ref (their generator) is no longer checked
+  out, so a direct Phase-2-domain test isn't available without re-cloning (deemed overkill).
+- **DECISION: ship the ROUTER (classical scale-search as strong primary + warp-net as hedge), not
+  classical-only.** Rationale: classical-only looks best on our (milder) data, but if the organizers'
+  Phase 2 warps behave like their Phase 1 — very likely (same team; Set B lists scan distortion) —
+  classical-only could crater to ~56% and cost the 40-pt localization score and selection. The router
+  hedges that catastrophic downside at a cost (net 2.35s/pair) within the 5s budget. The session's
+  work made the net scale-capable + warp-trained (previously stuck at fixed-10, useless for Phase 2)
+  and upgraded the generator (scan distortion = Set B realism = dataset-score credit) — necessary, not
+  wasted. Router wiring/tuning in `route.predict_full` is the remaining implementation step (keep it
+  simple: classical primary, net consulted where classical confidence is low — avoid regressing the
+  85%).
+
+---
+
+**[SUPERSEDED] Item 6 earlier reasoning (28 Aug) — kept for the record:**
+
+- *Fine-tune done:* warm-started from Phase 1 `best.pt`, 12 epochs on 3000 scale-varied [8,12]
+  pairs, lr 3e-4, ~1h on the RTX 3050. The net *did* learn some scale tolerance vs the untouched
+  Phase 1 net (one held-out set 66.7% → 81.7%; another flat 78.3%; Phase 1 domain 100% → 96.7%, a
+  small expected forgetting). Checkpoint in scratch `p2ckpt/last.pt`; **Phase 1 `best.pt` untouched.**
+- *Decisive head-to-head on 60-pair Phase 2 present pairs:* **classical scale-search 80% @5px
+  (0.56px median) > fine-tuned net 68% (0.86px); a simple ensemble matched classical (80%), no
+  gain.** So the net does not beat classical AND costs 2.35s/pair on the no-GPU grader.
+- *Why the reversal from Phase 1 (where net won 94% vs 75%):* Phase 1 scale was fixed at 10, so the
+  net's edge was absorbing geometric warps; Phase 2's dominant challenge is unknown scale, which the
+  classical **explicit** scale-search handles better than the net's implicit tolerance. Warp
+  absorption doesn't outweigh explicit scale handling here.
+- *Decision:* **ship classical-only for Phase 2 localization.** Simpler, faster, and more accurate
+  on the evidence. The fine-tune was worth it to *rule the net out with data* rather than guess.
+- *`train.py` bug fixed along the way:* `--resume` used to trust the resumed checkpoint's stale
+  `acc_val` as the "best" baseline, so on a different eval set no epoch ever beat it and `best.pt`
+  was never written (only `last.pt`). Now it re-evaluates the resumed net on the current `--eval2`
+  to set the baseline. Fixed in `driftmatch/train.py`.
+- *Not pursued (speculative, GPU-costly):* a "classical estimates scale → resample ref → run net
+  once at the correct scale" hybrid might let the net help specifically on the heavily-warped Set B
+  degraded pairs. Left as a future option only if classical-only proves weak on degraded data.
+
+**Localization failure diagnosis (why chasing the remaining misses isn't worth it):** of 9 misses
+in 44 present pairs on the 60-set, scale was recovered fine (median 0.58% err, same as the hits),
+so scale search is not the cause. 4/9 are `below_floor` difficulty — pairs the generator makes
+**unsolvable by construction** (landmark below the visibility floor, ~8% by policy) — they are meant
+to fail. The rest are a few genuinely hard weak-landmark cases (large 100-468px misses on periodic
+structure). So on *solvable* pairs the classical path is ~88% @5px; the 80% headline includes the
+unsolvable-by-design pairs. No cheap fix exists (scale is fine); the residual is inherent difficulty.
+The classical path is in good shape and not the bottleneck.
+
+**Still open:**
+- **Rotation / `theta` recovery.** The generator renders ref and wide from one layout at one
+  shared angle, so there is no *relative* rotation to recover, and `theta` is still 0. Phase 2
+  needs the wide rendered at θ relative to the ref, about the match centre — geometrically delicate
+  (sign convention, centre of rotation), and the sign cannot be validated without the organizers'
+  sample ground-truth theta (~29 Aug). Deliberately deferred rather than guessed unsupervised.
+- **Net retrain (item 6).** The data pipeline it needs is now mostly ready (scale + absent
+  generation work); still worth waiting until rotation is in and the Q answers land, so the net is
+  trained once on the complete Phase 2 distribution rather than retrained twice. GPU authorised by
+  the user for when it runs. Not started tonight — long, and better done on the finished pipeline.
+  *Also note:* **torch is not installed in the project `.venv`** — the router transparently falls
+  back to classical-only (verified: `predict_router.py` prints "net unavailable ... using classical
+  only" and still returns the right answer). So all tonight's improvements are on the classical
+  path, which is CPU-only and therefore representative of the no-GPU grader. Any net retrain needs a
+  torch(+CUDA) install first — a deliberate, supervised step, not something to do unattended.
+
+**Backward-compat re-verified after all tonight's edits:** `predict.py`, `predict_router.py`,
+`infer.py` all return the byte-identical `559.904, 470.001` on curated30 C00; `fine_score` still a
+4-tuple; `scripts.sweep_lambda` still imports. Phase 1 sampling unchanged (seed 7000 → scale 10.0,
+unsigned rotation). No regressions.
+
+---
+
+## Problem 3: regenerating the dataset (scale range, signed rotation, absent pairs, severity tiers)
+
+Correcting §7 item 8 of `PHASE2_UNDERSTANDING.md` — checked `driftsense/sampling.py` and
+`driftsense/physics.py` directly (grep, not the README's summary) and **the gap is smaller than
+originally scoped**, because the Phase 1 webinar-correction pass already built most of the physics:
+
+| Needed for Phase 2 | Status in code today |
+|---|---|
+| Rotation up to 5° | **Already there.** `sampling.py:66` — `ROTATION_DEG = (0.0, 5.0)`, comment cites the webinar directly. `rotation_deg` is already a recorded field on `PairSpec` (ground truth exists). |
+| Per-polygon scale jitter ±20% | **Already there.** `sampling.py:67` — `SCALE_JITTER = 0.20`, matches Gokul's "shrink or grow a polygon by 20%" almost verbatim. |
+| Charging (Set B) | **Already there.** `physics.py: apply_charging()` — field deflection + bright streaks, with a `streak_rate` parameter. |
+| Defocus (Set B) | **Already there.** `physics.py: defocus_sigma_nm`, combined in quadrature with probe PSF. |
+| **Zoom ratio ∈ [8,12]** | **Missing.** `sampling.py:139` — `wide_px_nm: float = 10.0` is a fixed default, not sampled per pair. This is the one genuinely new physical parameter to add. |
+| **Signed rotation (±, CCW positive)** | **Partially missing.** Current sampling is magnitude-only (`rng.uniform(0.0, 5.0)`); need a random sign bit so both directions occur and the reported `theta` has a meaningful sign to be scored against. |
+| **Absent-pair mode (Set C)** | **Missing entirely.** No `absent`/`present` logic in `sampling.py`. Needs a new pair-generation path: render two non-overlapping regions of one layout (same architecture, so periodically plausible) instead of placing the reference site inside the wide view at all. |
+| **4-tier severity ladder (Set B)** | **Missing as an explicit ladder** — the underlying continuous parameters (dose_ratio, charging, defocus_sigma) exist; they just aren't yet bucketed into 4 discrete, documented severity presets. |
+
+**Practical implication:** this is a lower-risk, smaller-diff task than the original gap analysis
+implied — three parameters to add/adjust to an existing, working sampler, not a new simulator.
+
+On hard-negative generation for Set C specifically: general Siamese-network literature on
+hard-negative mining (see sources) confirms the intuitive design here — random unrelated crops as
+"absent" pairs would be too easy and wouldn't test the rejection logic the way the rubric intends.
+The organizers' own description — *"a different die region of the same architecture... plausible
+and periodically similar"* — **is** a hard-negative specification: the absent pairs should come
+from the same periodic layout family as the true site, which is exactly the case that currently
+fools naive correlation (this is why `route.py` already has multi-match handling — the same
+periodicity that creates false peaks for localization is what should create false positives for
+rejection if not handled deliberately).
+
+---
+
+Sources:
+- [strec007/artimagen — NIST's ARTIMAGEN, the paper we already cite in GENERATOR_SPEC.md, with source](https://github.com/strec007/artimagen)
+- [Simulated SEM Images for Resolution Measurement (Cizmar et al., the ARTIMAGEN paper)](https://www.researchgate.net/publication/5239806_Simulated_SEM_Images_for_Resolution_Measurement)
+- [LogPolarFFTTemplateMatcher (yycho0108)](https://github.com/yycho0108/LogPolarFFTTemplateMatcher)
+- [LogPolarFFTTemplateMatcher (Smorodov)](https://github.com/Smorodov/LogPolarFFTTemplateMatcher)
+- [Fourier-Mellin transform for rotation/scale/translation-invariant target recognition (ResearchGate)](https://www.researchgate.net/publication/251972485_Rotation_scale_and_translation_invariant_automatic_target_recognition_based_on_Fourier-Mellin_transform_and_bispectrum_for_satellite_imagery)
+- [Deep Learning Improves Template Matching by Normalized Cross Correlation (arXiv 1705.08593)](https://arxiv.org/pdf/1705.08593)
+- [Building image pairs for siamese networks with Python (PyImageSearch, general pair-construction reference)](https://pyimagesearch.com/2020/11/23/building-image-pairs-for-siamese-networks-with-python/)
+
+**Note:** also surfaced "High-Fidelity Synthetic TEM Image Generation Using Diffusion Probabilistic
+Models for Data-Limited Semiconductor Metrology" (arXiv 2606.24817) — flagging only to explicitly
+rule it out. Gokul's instruction was unambiguous: *"Don't give Nano Banana or Gemini or OpenAI to
+create images for you... so that you know exactly what logic was used and what is the ground truth
+at pixel level."* Any generative-image-model approach is disqualifying by the deck's own logic
+(ground truth must come from placement, not from a model), regardless of image quality.
+
+---
+
+## Overnight session (29 Aug, unattended) — generator enriched with missing optical aberrations
+
+**Closed a real spec-vs-reality gap.** The README's "NIST ARTIMAGEN paradigm... astigmatism,
+vignette, gamma and barrel distortion" line was checked against `docs/GENERATOR_SPEC.md` and
+`physics.py` and turned out to describe the *reference paper's* pipeline, not something actually
+implemented (grep found zero matches for any of the four). Now implemented, all gated off by
+default (Phase 1 byte-identity reconfirmed: seed 7000 → all new fields zero/neutral):
+
+- **Astigmatism** (`apply_astigmatism`): a rotated anisotropic Gaussian kernel (sharp axis + smeared
+  axis + angle) — confirmed via research as the standard elliptical-PSF model. Additive with the
+  existing isotropic probe/defocus blur.
+- **Barrel/pincushion distortion** (`apply_barrel_distortion` + `barrel_displacement_at`):
+  single-term radial model, exact inverse via 3 Newton iterations. **Ground-truth sign convention
+  verified empirically, not assumed** — built a synthetic bright-dot test, warped it, located the
+  dot by centroid, and confirmed `new_gt = gt + displacement_at(gt)` (0.03px residual vs 4.4px for
+  the wrong sign). This is the OPPOSITE convention from `scan_distortion` (`gt - displacement`) —
+  easy to get backwards by pattern-matching the other one; caught by testing, not assuming.
+- **Vignette + gamma** (`apply_vignette`, `apply_gamma`): intensity-only, no coordinate risk.
+- **Compounding order handled correctly**: barrel applies inside `render()` (physics.py), before
+  scan_distortion (applied after, in `generate_dataset.py`) — so gt shifts must compose in that same
+  order: barrel's shift first, then scan-distortion's field evaluated at the already-shifted
+  position. Implemented and validated together, not independently.
+- **End-to-end validation** (20-pair set, `--phase2`, all aberrations on): **17/19 solvable pairs
+  localize to 0.0-0.7px** even with barrel+scan+astigmatism stacked on one pair (e.g. scan=4.1 +
+  astig=1.5 → 0.3px) — ground truth exact under compounded warps. 2/19 failed classical badly
+  (229px, 270px) — the intended effect: aberrations now strong enough to sometimes break periodic-
+  pattern classical matching, which is the net's reason to exist.
+- New CLI: `--optical-aberrations` (independent flag); `--phase2` enables it by default now, alongside
+  scale+rotation+scan-distortion. New manifest columns: `wide_astig_sigma_nm`, `wide_astig_angle_deg`,
+  `wide_barrel_k1`, `wide_vignette`, `wide_gamma`.
+
+**Next (continuing overnight):** regenerate a larger, richer training set with the full aberration
+suite, retrain the net on it, then rerun the decisive net-vs-classical-vs-router comparison —
+expecting a bigger, more decisive net edge than the scan-distortion-only run showed, since the data
+now covers more of what likely drove the organizers' large Phase 1 gap (56% vs 84%).
+
+---
+
+## Overnight: found a real rejection-threshold miscalibration, fixed with proper cost-weighting
+
+A regression check (running `register.py` on curated30 — Phase 1 data, reference always present)
+found **one pair falsely rejected**: C09, peak NCC 0.6857, just under the `FOUND_PEAK=0.70`
+threshold. Investigating turned up a real methodology flaw, not just a bad instance: **the
+threshold was calibrated by optimizing raw F1, which weighs a false-reject and a false-accept
+equally — but they are NOT equally costly under the actual scoring rubric.**
+
+- **False reject** (present pair, we report found=0): the contract forces pose columns to 0, so we
+  lose the *entire localization credit* for that pair (part of the 40-pt pool) **and** it counts as
+  a rejection-F1 false-negative (part of the 15-pt pool). Two pools hit.
+- **False accept** (absent pair, we report found=1): Set C isn't in the localization sets at all,
+  so this only costs the rejection-F1 false-positive. One pool hit.
+
+Re-swept the threshold on the 60-pair calibration set (`p2val60`) minimizing a cost function with
+false-rejects weighted 1x, 2x, and 3x relative to false-accepts, instead of optimizing symmetric F1.
+**Result: 0.68 is cost-optimal under all three weightings** (FN=1, FP=6, F1=0.925 — identical F1 to
+the old 0.70, so this is a clean improvement, not a tradeoff) and it clears C09's 0.6857.
+`route.FOUND_PEAK` updated 0.70 → 0.68; curated30 re-verified all-found after the fix (see log).
+
+**Residual risk, stated honestly:** C09 clears the new threshold by only 0.006 — a thin margin, not
+a robust one. If the organizers' actual Set B degradation is harsher than ours, more present pairs
+could sit near this edge. The durable fix is a better rejection signal than a single peak-NCC
+threshold (e.g. combining peak with a secondary signal, or a small calibrated model), not further
+threshold-nudging — noted as a real future-work item, not resolved tonight.
+
+**The general lesson, worth keeping:** when a scoring rubric has asymmetric costs across error
+types, calibrating against a symmetric metric (F1, accuracy) can silently pick the wrong operating
+point even when it "looks optimal" on its own metric. Worth checking this same asymmetry doesn't
+apply anywhere else in the pipeline once more of the rubric's exact mechanics are confirmed (e.g.
+via the pending Q2 answer on the rejection-F1 positive class).
+
+---
+
+## Overnight mistake, owned and fixed: killed an in-progress job by accident
+
+Copied the GPU-cleanup pattern from an earlier crash-recovery script (`train_phase2_warp.sh`, where
+it correctly cleaned up *stale* processes from a *previous crashed run* before starting) into a new
+launcher (`train_phase2_full.sh`) without noticing that this time, a **legitimate, currently-running
+sibling job** (the 4000-pair full-aberration data generation, ~34% done) was still active and shared
+the same process name. The blind `Get-Process python | Stop-Process -Force` killed it mid-generation
+— confirmed via the task notification reporting the generation as "completed" when it had actually
+been terminated (no `labels.csv` was written, only 1351/4000 pairs existed on disk). Lost roughly
+15-20 minutes of compute, not data integrity (nothing corrupted, just incomplete).
+
+**Fixed:** removed the blind kill from the script; noted inline that any future GPU-freeing should
+target specific stale PIDs (checked via `nvidia-smi`), not all python processes indiscriminately.
+Regenerated the training data cleanly (new seed range, no concurrent risk this time since the
+training launcher's kill step is gone and it was already safely idling in its wait-loop).
+
+**Recorded for the same reason everything else in this file is recorded: an autonomous overnight
+session should be auditable, including its mistakes** — this one was caught immediately (checked the
+generation progress right after launching the second script, on the reasoning that both jobs used
+the word "python" in a way that could collide), not discovered after the fact.
+
+---
+
+## Overnight: full-aberration retrain, the final router design, and a rejected "fix" (with evidence)
+
+**Retrain on full-aberration data (astigmatism+barrel+vignette+gamma+scan-distortion+scale) completed
+cleanly** — all 12 epochs, resumed from the scan-distortion-only checkpoint (81.7%), reached **best
+held-out 88.3%** (train.py's `quick_eval`, which uses the net's raw fixed-10x path, no scale
+correction). Checkpoint copied into the repo as `driftmatch/checkpoints/best_phase2.pt` (a NEW file
+-- `best.pt`, the Phase 1 shipped checkpoint used by `infer.py`, is untouched).
+
+**Decisive comparison on the 116-pair full-aberration eval set, with this new checkpoint:**
+
+| Method | @5px | median err | time/pair |
+|---|---|---|---|
+| classical (scale-search) | 88% | 0.42px | 1.46s |
+| net @ classical-corrected scale | 86% | 2.87px | 0.09s |
+| **net @ fixed-10 (raw, no scale correction)** | **89%** | 0.67px | 0.09s |
+| **hybrid: classical scale/found/score + net x,y** | **89%** | 0.67px | 1.62s |
+
+**Counterintuitive finding, worth keeping:** "helping" the net with the classically-estimated scale
+(resampling the reference to the correct footprint before feeding it) made the net WORSE (86% vs
+89%). The net's encoder was trained on a fixed 100x100 reference input; a variable-sized stamp is
+genuinely out-of-distribution for its architecture, even though the correlation math is technically
+size-agnostic. The net has instead learned scale ROBUSTNESS implicitly, by being trained across the
+full [8,12] range while always seeing the reference at its native fixed-10x footprint -- so the
+"naive" fixed input is actually the in-distribution one. Measured, not assumed.
+
+**Final router design: classical supplies `theta`/`scale`/`found`/`score` (needed regardless -- the
+net has no pose head); the net supplies `x, y` when available, unconditionally, with classical's own
+`x, y` as the fallback if no net (`route.py: predict_full`, already the exact shape this was
+implemented in earlier -- no further code change needed here). 89% @5px, 1.6s/pair, well inside the
+5s budget. `register.py` updated to load `best_phase2.pt` explicitly (not the shared `DEFAULT_CKPT`,
+which stays pointed at the Phase 1 checkpoint so `infer.py` is unaffected).
+
+**A "fix" that was tested and correctly REJECTED, with numbers, not intuition:** a regression check
+on curated30 (Phase 1 data) showed the hybrid's net path failing badly on one pair (`C26`, 528px
+miss -- a case CASES.md documents as a specific drift-shear stress test). The instinct was to add a
+safety valve: if net and classical disagree by >20px, trust classical. **Tested before shipping it,
+and it made both domains WORSE, not better** -- curated30 dropped 97%->90%, the full-aberration set
+dropped 89%->88%, both landing exactly at classical's own baseline. The reason: disagreement between
+net and classical does NOT mean net is wrong -- in most of the ~20% of pairs where they disagree by
+>20px, **net was the one that was right**, and classical was fooled by a decoy. Blanket-deferring to
+classical on disagreement discards every one of those wins along with catching the one C26-style
+loss, net negative. **Decision: no valve, ship the unconditional hybrid.** C26's miss is an accepted
+residual (classical itself already misses ~10% of curated30, not the ~100% assumed before this was
+actually measured) -- not a regression introduced by this design, and not fixable by the naive
+mechanism tried. A real fix, if pursued later, would need a signal that actually discriminates who is
+right (e.g. the net's own heatmap confidence, or `is_multimatch()` on the net's heatmap the way the
+original Phase 1 router did it) -- not raw disagreement distance, which doesn't carry that
+information. Noted as a future-work item, not resolved tonight, and not needed to be: the unconditional
+hybrid is already a validated improvement over classical alone.

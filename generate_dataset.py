@@ -53,7 +53,7 @@ from PIL import Image
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from driftsense.physics import render, render_downsampled
 from driftsense.raster import make_pair, make_pair_shared_canvas
-from driftsense.sampling import build_layout, sample_spec
+from driftsense.sampling import build_layout, sample_spec, SCALE_RANGE
 
 VERSION = "0.1.0"
 N_PX = 1000
@@ -63,26 +63,69 @@ FINE_PX_NM = 2.0   # intermediate resolution used by --render-mode resize
 
 
 def generate_one(seed: int, style: str | None, out_dir: pathlib.Path,
-                 n_px: int = N_PX, render_mode: str = "physical"):
+                 n_px: int = N_PX, render_mode: str = "physical",
+                 scale_range: tuple | None = None, signed_rotation: bool = False,
+                 absent: bool = False, scan_distortion_max: float = 0.0,
+                 optical_aberrations: bool = False):
     """Render and write one pair. Returns the manifest row."""
-    spec = sample_spec(seed, style=style, n_px=n_px)
+    spec = sample_spec(seed, style=style, n_px=n_px, scale_range=scale_range,
+                       signed_rotation=signed_rotation, absent=absent,
+                       scan_distortion_max=scan_distortion_max,
+                       optical_aberrations=optical_aberrations)
     layout = build_layout(spec, target_nm=TARGET_NM, extent_nm=EXTENT_NM)
 
     offset = (spec.gt_x - n_px / 2.0, spec.gt_y - n_px / 2.0)
     rng = np.random.default_rng(seed ^ 0xA11CE)
 
+    # The wide view is rendered at the pair's actual zoom (spec.wide.px_nm). In
+    # Phase 1 this is the fixed 10.0; in Phase 2 it is the sampled [8,12] value,
+    # so the rendered pixels match the recorded ground-truth scale.
     if render_mode == "resize":
+        if scale_range is not None or absent:
+            raise ValueError("resize render-mode supports neither a scale range "
+                             "nor absent pairs; use physical mode")
         mat_ref, fine_wide, gt, factor = make_pair_shared_canvas(
             layout, TARGET_NM, offset, n_px=n_px)
         ref = render(mat_ref, spec.ref, rng)
         wide = render_downsampled(fine_wide, factor, 1.0, spec.wide, rng)
     else:
-        mat_ref, mat_wide, gt = make_pair(layout, TARGET_NM, offset, n_px=n_px)
+        mat_ref, mat_wide, gt = make_pair(layout, TARGET_NM, offset,
+                                          wide_px_nm=spec.wide.px_nm, n_px=n_px,
+                                          absent=absent)
         ref = render(mat_ref, spec.ref, rng)
         wide = render(mat_wide, spec.wide, rng)
 
     # the placement is the ground truth; this only guards against a regression
+    # (for absent pairs both sides carry the -1 sentinel, so it still holds)
     assert abs(gt[0] - spec.gt_x) < 1e-6 and abs(gt[1] - spec.gt_y) < 1e-6
+
+    # Barrel distortion (Phase 2 Set B) is applied INSIDE render() (physics.py),
+    # so `wide` already carries the warp by this point -- the ground truth must
+    # be shifted to match. Sign convention verified empirically (not assumed):
+    # new_gt = gt + displacement_at(gt) for the forward map this function uses.
+    # Applied here, BEFORE the scan-distortion block below, because that is the
+    # actual pixel order (barrel happens first, inside render()) -- warps
+    # compose in sequence, so scan-distortion's field must be evaluated at the
+    # already-barrel-shifted position, not the original one.
+    if spec.wide.barrel_k1 != 0 and spec.present:
+        from driftsense.physics import barrel_displacement_at
+        bdx, bdy = barrel_displacement_at(spec.gt_x, spec.gt_y, wide.shape,
+                                          spec.wide.barrel_k1)
+        spec.gt_x = float(spec.gt_x + bdx)
+        spec.gt_y = float(spec.gt_y + bdy)
+
+    # Scan distortion (Phase 2 Set B): warp the wide by a smooth field and shift
+    # the ground truth by the field's value at the landmark, so the label stays
+    # exact. Applied after the placement check, wide-only (a relative warp).
+    if spec.wide.scan_distortion_px > 0:
+        from driftsense.physics import scan_distortion_field, apply_scan_distortion
+        dx, dy = scan_distortion_field(wide.shape, spec.wide.scan_distortion_px, rng)
+        wide = np.clip(np.rint(apply_scan_distortion(wide, dx, dy)), 0, 255).astype(np.uint8)
+        if spec.present:
+            gyi = min(max(int(round(spec.gt_y)), 0), wide.shape[0] - 1)
+            gxi = min(max(int(round(spec.gt_x)), 0), wide.shape[1] - 1)
+            spec.gt_x = float(spec.gt_x - float(dx[gyi, gxi]))
+            spec.gt_y = float(spec.gt_y - float(dy[gyi, gxi]))
 
     # the organisers' automated harness assumes exactly this size
     assert ref.shape == (n_px, n_px) and wide.shape == (n_px, n_px)
@@ -109,13 +152,15 @@ def _worker(args):
     return generate_one(*args)
 
 
-COLUMNS = ["pair_id", "ref_path", "wide_path", "gt_x", "gt_y", "style",
+COLUMNS = ["pair_id", "ref_path", "wide_path", "gt_x", "gt_y", "scale", "style",
            "regime", "pitch_nm", "rotation_deg", "landmark",
            "landmark_size_nm", "landmark_wide_px", "difficulty",
            "size_over_res", "coarse_period_nm", "n_instances",
-           "ler_3sigma_nm", "ler_xi_nm", "wide_res_nm", "placement",
+           "ler_3sigma_nm", "ler_xi_nm", "wide_res_nm", "placement", "present",
            "ref_blur_nm", "wide_blur_nm", "ref_dose", "wide_dose",
-           "wide_charging", "ref_drift_nm", "wide_drift_nm",
+           "wide_charging", "wide_scan_distortion_px", "wide_astig_sigma_nm",
+           "wide_astig_angle_deg", "wide_barrel_k1", "wide_vignette", "wide_gamma",
+           "ref_drift_nm", "wide_drift_nm",
            "ref_vib_nm", "wide_vib_nm", "render_mode", "seed"]
 
 
@@ -139,7 +184,39 @@ def main():
                          "organisers' starter prompt -- held-out validation only")
     ap.add_argument("--workers", type=int, default=0,
                     help="parallel processes (0 = cpu_count-2)")
+    ap.add_argument("--phase2", action="store_true",
+                    help="Phase 2 mode: sample the zoom ratio in [8,12] and use "
+                         "signed rotation (+/-5 deg). Physical render-mode only.")
+    ap.add_argument("--scale-range", type=float, nargs=2, default=None,
+                    metavar=("LO", "HI"),
+                    help="explicit zoom range (overrides --phase2's [8,12])")
+    ap.add_argument("--absent-fraction", type=float, default=0.0,
+                    help="fraction of pairs with no true instance (Set C); "
+                         "decided per-seed, deterministically. Phase 2 mix ~0.22")
+    ap.add_argument("--scan-distortion", type=float, default=0.0,
+                    help="max scan-distortion warp amplitude in wide px (Set B); "
+                         "--phase2 defaults it to 6.0")
+    ap.add_argument("--optical-aberrations", action="store_true",
+                    help="enable astigmatism/barrel/vignette/gamma (Set B "
+                         "realism); --phase2 enables this by default")
     a = ap.parse_args()
+
+    scale_range = None
+    signed_rotation = False
+    scan_distortion_max = a.scan_distortion
+    optical_aberrations = a.optical_aberrations
+    if a.phase2:
+        scale_range, signed_rotation = SCALE_RANGE, True
+        if scan_distortion_max == 0.0:
+            scan_distortion_max = 6.0
+        optical_aberrations = True
+    if a.scale_range is not None:
+        scale_range = tuple(a.scale_range)
+
+    def _is_absent(seed):
+        if a.absent_fraction <= 0.0:
+            return False
+        return float(np.random.default_rng(seed ^ 0xAB5E17).random()) < a.absent_fraction
 
     if a.seeds_file:
         seeds = [int(s) for s in a.seeds_file.read_text().split() if s.strip()]
@@ -158,7 +235,8 @@ def main():
     workers = a.workers or default_workers
 
     t0 = time.perf_counter()
-    jobs = [(s, style, a.out, N_PX, a.render_mode) for s in seeds]
+    jobs = [(s, style, a.out, N_PX, a.render_mode, scale_range, signed_rotation,
+             _is_absent(s), scan_distortion_max, optical_aberrations) for s in seeds]
     if workers > 1:
         with ProcessPoolExecutor(max_workers=workers) as ex:
             rows = list(ex.map(_worker, jobs, chunksize=1))
@@ -172,11 +250,16 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
+    # In Phase 2 the zoom is per-pair (see the `scale` column); the fixed
+    # wide_px_nm/fov/footprint below describe the Phase 1 nominal only.
     (a.out / "dataset_meta.json").write_text(json.dumps(dict(
         generator="driftsense", version=VERSION, n_px=N_PX,
         ref_px_nm=1.0, wide_px_nm=10.0,
         ref_fov_nm=N_PX * 1.0, wide_fov_nm=N_PX * 10.0,
         footprint_px=int(N_PX * 1.0 / 10.0),
+        phase2=bool(scale_range is not None or signed_rotation),
+        scale_range=list(scale_range) if scale_range else None,
+        signed_rotation=signed_rotation,
         style=a.style, render_mode=a.render_mode, pairs=len(rows), seeds=seeds,
         layout_extent_nm=EXTENT_NM, target_nm=TARGET_NM,
     ), indent=2))

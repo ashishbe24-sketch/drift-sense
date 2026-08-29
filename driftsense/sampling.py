@@ -66,6 +66,11 @@ UNIFORM_PLACEMENT_FRACTION = 0.20
 ROTATION_DEG = (0.0, 5.0)       # webinar: "only 1 to 3 degrees", up to 5
 SCALE_JITTER = 0.20             # webinar: shrink or grow a polygon by 20%
 
+# Phase 2: the zoom ratio is no longer fixed at 10x. The addendum draws it
+# uniformly in [8, 12], different per pair, and asks it to be recovered. The
+# reference stays 1 nm/px, so the wide pixel size in nm *is* the scale.
+SCALE_RANGE = (8.0, 12.0)
+
 # Fraction of pairs where the landmark itself recurs on a coarse lattice,
 # producing several near-identical candidates in one wide view. The evaluator
 # confirmed their test data contains these: "we will also give repeated areas
@@ -101,6 +106,7 @@ class PairSpec:
     gt_y: float
     ref: CaptureParams
     wide: CaptureParams
+    present: int = 1          # Phase 2 Set C: 0 = the reference is absent (found=0)
 
     def manifest_row(self):
         r, w = self.ref, self.wide
@@ -108,6 +114,7 @@ class PairSpec:
             seed=self.seed, style=self.style, regime=self.regime,
             pitch_nm=round(self.pitch_nm, 3),
             rotation_deg=round(self.rotation_deg, 4),
+            scale=round(self.wide.px_nm / self.ref.px_nm, 4),
             landmark=self.landmark,
             landmark_size_nm=round(self.landmark_size_nm, 2),
             landmark_wide_px=round(self.landmark_size_nm / w.px_nm, 2),
@@ -118,12 +125,18 @@ class PairSpec:
             ler_3sigma_nm=round(3 * self.ler_sigma_nm, 2),
             ler_xi_nm=round(self.ler_xi_nm, 2),
             wide_res_nm=round(effective_resolution_nm(w), 2),
-            placement=self.placement,
+            placement=self.placement, present=self.present,
             gt_x=round(self.gt_x, 4), gt_y=round(self.gt_y, 4),
             ref_blur_nm=round(r.total_blur_nm(), 3),
             wide_blur_nm=round(w.total_blur_nm(), 3),
             ref_dose=r.dose_e_per_grey, wide_dose=w.dose_e_per_grey,
             wide_charging=round(w.charging, 3),
+            wide_scan_distortion_px=round(w.scan_distortion_px, 3),
+            wide_astig_sigma_nm=round(w.astig_extra_sigma_nm, 3),
+            wide_astig_angle_deg=round(w.astig_angle_deg, 2),
+            wide_barrel_k1=round(w.barrel_k1, 4),
+            wide_vignette=round(w.vignette_strength, 3),
+            wide_gamma=round(w.gamma, 3),
             ref_drift_nm=round(r.drift_nm, 2), wide_drift_nm=round(w.drift_nm, 2),
             ref_vib_nm=round(r.vibration_nm, 2), wide_vib_nm=round(w.vibration_nm, 2),
         )
@@ -136,15 +149,35 @@ def _pick_regime(rng):
 
 
 def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
-                wide_px_nm: float = 10.0) -> PairSpec:
-    """Draw every parameter of one pair from `seed` alone."""
+                wide_px_nm: float = 10.0, scale_range: tuple | None = None,
+                signed_rotation: bool = False, absent: bool = False,
+                scan_distortion_max: float = 0.0,
+                optical_aberrations: bool = False) -> PairSpec:
+    """Draw every parameter of one pair from `seed` alone.
+
+    Phase 2 options, both gated so the default (Phase 1) call is byte-identical:
+      scale_range     : if given (e.g. (8, 12)), the wide pixel size -- i.e. the
+                        zoom ratio -- is drawn from it per pair instead of the
+                        fixed `wide_px_nm`. This draw is only taken when the flag
+                        is set, so Phase 1 seeds are undisturbed.
+      signed_rotation : if True, rotation is drawn in +/-ROTATION_DEG[1] instead
+                        of [0, ROTATION_DEG[1]]. One uniform() call either way,
+                        so the rng stream position is identical to Phase 1 -- only
+                        the value changes.
+    """
     rng = np.random.default_rng(seed)
+
+    # Phase 2 zoom: drawn first, before any other parameter, so the [8,12] scale
+    # feeds the placement geometry below. Gated: no draw when scale_range is None.
+    if scale_range is not None:
+        wide_px_nm = float(rng.uniform(*scale_range))
 
     style = style or ("dram" if rng.random() < 0.5 else "finfet")
     regime = _pick_regime(rng)
     lo, hi = REGIMES[regime]["pitch_nm"]
     pitch = float(rng.uniform(lo, hi))
-    rot = float(rng.uniform(*ROTATION_DEG))
+    rot = float(rng.uniform(-ROTATION_DEG[1], ROTATION_DEG[1]) if signed_rotation
+                else rng.uniform(*ROTATION_DEG))
     ler_sigma = float(rng.uniform(*LER_SIGMA_NM))
     ler_xi = float(rng.uniform(*LER_XI_NM))
     landmark = "plus" if rng.random() < 0.6 else "pad"
@@ -205,6 +238,29 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
     dose_ratio = float(rng.uniform(2.5, 16.0))
     wide_dose = ref.dose_e_per_grey / dose_ratio
     current_boost = float(np.clip(np.sqrt(dose_ratio) / 2.5, 1.0, 2.2))
+    # Phase 2 Set B scan distortion, on the wide (survey) capture only, so it is
+    # a *relative* warp between ref and wide -- the thing a rigid template cannot
+    # absorb. Gated: no draw unless scan_distortion_max is set, so Phase 1 seeds
+    # are byte-identical. ~60% of enabled pairs carry some distortion.
+    if scan_distortion_max > 0:
+        scan_dist = (float(rng.uniform(0.0, scan_distortion_max))
+                     if rng.random() < 0.6 else 0.0)
+    else:
+        scan_dist = 0.0
+    # Optical aberrations (astigmatism, barrel, vignette, gamma) -- Set B
+    # realism, previously spec'd (README) but never implemented. Each is
+    # independently gated at ~40-50% so training sees a mix of clean and
+    # aberrated pairs, not aberrations-always. All zero unless enabled, so
+    # Phase 1 seeds are unaffected.
+    if optical_aberrations:
+        astig_sigma = float(rng.uniform(1.0, 5.0)) if rng.random() < 0.4 else 0.0
+        astig_angle = float(rng.uniform(0, 180)) if astig_sigma > 0 else 0.0
+        barrel_k1 = (float(rng.uniform(-0.06, 0.06)) if rng.random() < 0.4 else 0.0)
+        vignette = float(rng.uniform(0.1, 0.35)) if rng.random() < 0.5 else 0.0
+        gamma = float(rng.uniform(0.85, 1.2)) if rng.random() < 0.5 else 1.0
+    else:
+        astig_sigma = astig_angle = barrel_k1 = vignette = 0.0
+        gamma = 1.0
     wide = CaptureParams(
         px_nm=wide_px_nm,
         probe_sigma_nm=ref.probe_sigma_nm * current_boost,
@@ -217,6 +273,9 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
         vibration_nm=float(rng.uniform(0.0, 8.0)),
         charging=float(rng.uniform(0.0, 4.0)) if rng.random() < 0.5 else 0.0,
         streak_rate=float(rng.uniform(0.0, 3.0)) if rng.random() < 0.3 else 0.0,
+        scan_distortion_px=scan_dist,
+        astig_extra_sigma_nm=astig_sigma, astig_angle_deg=astig_angle,
+        barrel_k1=barrel_k1, vignette_strength=vignette, gamma=gamma,
         dose_e_per_grey=wide_dose,
         read_sigma=float(rng.uniform(1.0, 3.5)),
     )
@@ -232,13 +291,23 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
     ratio = float(rng.uniform(ratio_lo, ratio_hi))
     size = float(np.clip(ratio * res_nm, *LANDMARK_ABS_NM))
 
+    # Absent (Set C): the reference has no true instance in the wide view. The
+    # placement draws above are kept (so the rng stream is unchanged) but the
+    # ground truth is marked absent and the coordinates are set to a -1 sentinel;
+    # generate_one renders the wide from the same architecture with the landmark
+    # removed. present=0 is the rejection ground truth.
+    if absent:
+        placement = "absent"
+        gx = gy = -1.0
+
     return PairSpec(seed=seed, style=style, regime=regime, pitch_nm=pitch,
                     rotation_deg=rot, landmark=landmark, landmark_size_nm=size,
                     difficulty=difficulty, size_over_res=size / res_nm,
                     coarse_period_nm=coarse_period_nm,
                     ler_sigma_nm=ler_sigma, ler_xi_nm=ler_xi,
                     n_instances=len(_lattice_offsets(coarse_period_nm or None, 7000.0)),
-                    placement=placement, gt_x=gx, gt_y=gy, ref=ref, wide=wide)
+                    placement=placement, present=(0 if absent else 1),
+                    gt_x=gx, gt_y=gy, ref=ref, wide=wide)
 
 
 def build_layout(spec: PairSpec, target_nm=(6000.0, 6000.0), extent_nm=14000.0):
