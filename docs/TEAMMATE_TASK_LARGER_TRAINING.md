@@ -5,6 +5,24 @@ specific piece. Everything below assumes you're in the repo root with the venv s
 (`python -m venv .venv`, then `pip install -r requirements.txt` — needs `torch` for this task,
 CUDA build recommended if you have a GPU, CPU build also works, just slower).
 
+> **IMPORTANT — pull the latest first (`git pull`) before you generate any data.** The generator
+> was upgraded after this doc was first written: **`--phase2` now renders the wide image rotated
+> relative to the reference (±5°), not just a shared tilt.** This is the single most important
+> reason this retrain matters now. The current shipped net (`best_phase2.pt`) was trained *before*
+> that change, so **it has never seen a rotated pair** — which is why accuracy drops on Phase 2's
+> ±5° rotation. Because `--phase2` now bakes rotation into the training data automatically, this
+> retrain will produce the first genuinely rotation-aware net. That is the accuracy win we're after,
+> so treat it as the headline goal of this task, not a side effect.
+>
+> Two consequences for the steps below:
+> 1. Your eval set (step 3) **must also be `--phase2`** so it contains rotation — otherwise you'll
+>    be measuring on rotation-free data and won't see the actual improvement. The commands below
+>    already use `--phase2` for eval; keep it that way.
+> 2. When you report back (step 6), **measure rotation (`theta`) recovery accuracy too**, not just
+>    localization — compare recovered `theta` against the manifest's `rotation_deg` on well-localized
+>    pairs (median abs error in degrees, fraction within ≤0.25°/0.5°/1.0° tiers). `theta` still
+>    comes from the classical path, so this checks the whole pipeline, not just the net.
+
 ## Why this task
 
 The current model (`driftmatch/checkpoints/best_phase2.pt`) was trained overnight on a
