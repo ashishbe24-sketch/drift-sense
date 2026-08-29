@@ -224,7 +224,7 @@ def main():
     line("Calibration AUC (10)", cal_pts, 10, f"AUC={a_uc:.3f}")
     core = loc_pts + scale_pts + rot_pts + rej_pts + cal_pts
     print("-" * 62)
-    print(f"  CORE TOTAL (of 95 auto-scorable)   {core:6.2f} / 95")
+    print(f"  CORE TOTAL (of 85 auto-scorable)   {core:6.2f} / 85")
     print(f"  Efficiency (5): median {med_t:.2f}s/pair vs 5s budget "
           f"({'OK' if med_t <= 5 else 'OVER'}); relative quartile is cross-team, not scorable here")
     print(f"  Generator/citations/failure (10): manual, not auto-scored")
