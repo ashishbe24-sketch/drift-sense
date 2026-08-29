@@ -513,6 +513,195 @@ implemented in earlier -- no further code change needed here). 89% @5px, 1.6s/pa
 5s budget. `register.py` updated to load `best_phase2.pt` explicitly (not the shared `DEFAULT_CKPT`,
 which stays pointed at the Phase 1 checkpoint so `infer.py` is unaffected).
 
+## "The results dropped" -- investigated properly, not waved away (29 Aug)
+
+After the rotation work, a fresh 30-pair test showed classical-only localization at 63% @5px,
+well below the previously-quoted 88-89%. Challenged (rightly) to find the real cause rather than
+explain it away or quietly tune a number back up. Three separate, rigorous checks, in order:
+
+1. **Is the new angle-search code itself a regression?** Generated 60 pairs matching the earlier
+   full-aberration/unknown-scale conditions exactly, but held out of `signed_rotation` (i.e. the
+   same distribution the original 88% figure was measured on, before relative rotation existed).
+   Ran `solve.locate` on the identical 60 pairs twice: once with the OLD default `ANGLES` grid (no
+   refinement, the pre-this-session code), once with the NEW `PHASE2_ANGLES` + `_refine_angle`.
+   **Result: identical, 76.7% @5px both ways, median 0.498 vs 0.497px, zero pairs flipped in either
+   direction.** The angle-search change is a provable no-op on non-rotated data -- ruled out with a
+   clean A/B, not by assumption.
+2. **Is real relative rotation itself the cause?** The controlled ablation earlier in this file
+   (same 30 seeds, with vs without real `relative_theta_deg`, identical noise realization) already
+   answered this: 19/30 vs 20/30 -- one pair, inside sampling noise for n=30. Also ruled out.
+3. **What actually explains the gap: classical-only was being tested by accident.** This repo's
+   `.venv` has no torch (`requirements.txt` lists it, but it was never installed here), so every
+   test today silently degraded to the classical-only fallback -- `route.load_net` printed
+   "net unavailable ... using classical only" and it went unnoticed. The 88-89% figures being
+   compared against were always the **net+classical router**, not classical alone -- an
+   apples-to-oranges comparison. Found a second Python environment on the machine
+   (`C:\Users\ARYAN\AppData\Local\Programs\Python\Python312\python.exe`, torch 2.5.1+cu121, CUDA
+   available -- the environment Phase 1 training already used) and reran the exact same pairs
+   through the real router (`best_phase2.pt`):
+
+   | Set | Classical-only | Real router (net+classical) |
+   |---|---|---|
+   | 30-pair rotation set | 63.3% @5px | **83.3% @5px**, median 0.755px |
+   | 150-pair mixed present/absent set | ~68% overall correctness | **81.1% @5px** localization (present only), median 0.787px |
+
+   Theta accuracy under the router: 0.261 deg / 0.218 deg median (comparable to the classical-only
+   0.286 deg reported earlier -- theta still comes from classical either way, per the router's
+   design, so this is expected).
+
+**Conclusion:** no regression from today's rotation/angle-search work (proven by #1 and #2, not
+assumed); the apparent drop was a testing-environment mistake (#3) compounded by normal
+small-sample variance (classical-only alone has been observed anywhere from 63% to 88% across
+different 30/60/116-pair random draws generated today -- these are still fairly small samples).
+81-83% router accuracy is the honest, representative number, in the same ballpark as the previously
+quoted 89% (that earlier figure also had no real rotation in the data, which this new number does).
+
+**Process note, worth keeping:** going forward, run validation that is meant to represent the
+shipped system through the torch/CUDA Python 3.12 environment, not `.venv` -- and state explicitly
+whether a reported number is classical-only or the full router, since silently reporting the
+degraded fallback as if it were the shipped path is exactly the kind of mistake that erodes trust
+in every other number in this document if it happens again unnoticed.
+
+---
+
+## Confidence-calibration AUC measured for the first time -- and a real rejection weakness found (29 Aug)
+
+Item 2 of the priority list ("validate the AUC properly" -- it had never been tested, only assumed
+monotonic). Generated a fresh 150-pair mixed present/absent set (122 present, 28 absent, seed
+850000, `--phase2 --absent-fraction 0.22`) independent of the 60-pair set `FOUND_PEAK` was
+originally calibrated on, and computed AUC of the `score` column (peak NCC) against per-pair
+correctness (present: found=1 and localized <=5px; absent: found=0), via a rank-sum AUC (no
+sklearn dependency, matches the standard Mann-Whitney U formulation):
+
+| Metric | AUC |
+|---|---|
+| score -> found correctly predicted (rejection only) | 0.789 |
+| score -> localized <=5px \| present (score as localization confidence) | 0.615 |
+| **score -> overall correctness (the literal rubric metric)** | **0.657** |
+
+0.657 is mediocre for a calibration signal. Digging into why (not just reporting the number)
+surfaced a real problem, larger than calibration noise: **rejection separability itself breaks
+down on "resolved"-regime absent pairs** -- the most common pitch regime by design weight (60%).
+Absent-pair peak-NCC scores in that regime ranged up to **0.97** on this set, against a present-pair
+median of 0.94 -- i.e. statistically indistinguishable. Sweeping every threshold in [0.50, 0.95] on
+this 150-pair set for the best possible F1 still only correctly rejects 6/28 absent pairs (21%);
+this is not a threshold-tuning problem, it is a signal-separability ceiling. The reason: "a
+different die region of the same architecture" (the Set C spec) means an absent pair *is* periodic,
+and on well-resolved periodic structure a decoy peak can be nearly as strong as a true landmark
+peak -- exactly the same periodicity that already motivates the centre-tie-break for localization
+now also defeats a single-peak-value rejection rule.
+
+**Why this matters for `docs/TEAMMATE_TASK_LARGER_TRAINING.md`:** that task recalibrates
+`FOUND_PEAK` on a bigger (300-pair) set, which will likely still help (more data, tighter
+threshold estimate) but should not be expected to fully close this gap -- a bigger calibration set
+narrows the *estimate* of a threshold, it does not create separability that the underlying signal
+does not have. Recorded here so whoever reports back on that task isn't surprised if F1 improves
+only modestly, or plateaus, despite 5x the calibration data. The durable fix (unstarted, real
+future work, matches what an earlier note already anticipated) is a rejection signal that is not a
+single peak value -- e.g. combining peak with the existing `second_ratio`/`distinct` diagnostics in
+a regime-aware way, or, if the net is available, its own heatmap's peak/second-peak behaviour
+(`route.is_multimatch`'s machinery, already built for a different purpose, is the natural
+candidate to repurpose here).
+
+**Update (29 Aug, later): tried a proper fix, it honestly didn't work.** Implemented and tested
+Peak-to-Sidelobe Ratio (PSR) -- the actual textbook statistic from correlation-filter target
+detection (the peak's z-score against the correlation surface's own mean/std, excluding its
+immediate neighborhood), which is a genuinely different measurement from the `second_ratio`/
+`distinct` diagnostics already tried and rejected (those compare only to the second-best local
+max; PSR compares to the whole surface's noise floor). Tested at 4 exclude-radii (10/20/40/80 wide-
+px) on the same 150-pair set: **PSR loses to plain peak NCC at every radius** (AUC 0.766-0.819
+range for PSR vs 0.819 for raw peak). The reason makes sense in hindsight: on a well-resolved
+periodic surface, the ENTIRE correlation map is uniformly high (strong self-similarity everywhere
+the lattice aligns), so both PSR and second_ratio -- which measure how much the peak stands out
+from the rest of the surface -- get washed out exactly where discrimination is needed most. The
+problem is the peak's absolute height not separating present from absent in that regime, not its
+shape relative to its surroundings, so shape-based statistics don't help.
+
+**Decision: do not force a fix on too little data.** Two different, literature-grounded signal
+candidates have now failed empirically. The remaining honest options (a small classifier combining
+multiple diagnostics, or using the net's own heatmap confidence as an additional signal) both need
+more labeled absent-pair data than exists right now (this set has only 28 absent pairs -- fitting
+and validating a classifier on that few positives would itself risk being the kind of
+looks-good-on-paper, doesn't-generalize fix that should be avoided). **Deferred until the
+teammate's 300-pair calibration set (`docs/TEAMMATE_TASK_LARGER_TRAINING.md`) lands** -- that is
+real additional data to fit and validate a combined signal honestly, rather than overfitting one
+now. Not attempted further tonight for that reason, not because the problem is unimportant.
+
+**Not attempted tonight, deliberately (superseded detail, kept for the record):** redesigning the rejection signal itself. That is a bigger
+change than "validate the AUC" calls for, overlaps with the teammate's in-flight recalibration
+task, and risks conflicting/duplicate work on the same file (`route.py`'s `FOUND_PEAK` and the
+`found` logic). Flagging with hard numbers so the next person (whoever picks this up, possibly
+after the teammate reports back) can prioritize it correctly instead of assuming recalibration
+alone will fix it.
+
+---
+
+## Rotation (`theta`) implemented and validated self-consistently (29 Aug)
+
+Closed the biggest remaining gap. The diagnosis in the earlier "Still open" note below was
+exactly right -- the generator rendered ref and wide from one shared `Layout.angle_deg`, so there
+was no *relative* rotation between them to recover. Fixed with a small, surgical change rather
+than a new mechanism, reusing exactly the field the generator already sampled for this purpose:
+
+- **`driftsense/raster.py::make_pair`** gained `relative_theta_deg` (default 0.0 = today's
+  behaviour, byte-identical). Nonzero: only the WIDE capture is rendered at a shifted
+  `layout.angle_deg`; the reference keeps the base angle. The pivot the rasteriser already rotates
+  about (`Layout.centre_nm`) is the landmark -- i.e. exactly (gt_x, gt_y)'s nm coordinate -- so it
+  is a fixed point of the rotation and **no ground-truth position shift is needed** (unlike barrel
+  or scan distortion, which do shift a non-pivot point).
+- **`generate_dataset.py`**: when `signed_rotation=True` (already the flag `--phase2` sets), the
+  existing signed draw `spec.rotation_deg` is passed through as `relative_theta_deg` instead of
+  being baked into the shared layout angle. When `signed_rotation=False` (Phase 1), nothing
+  changes -- `relative_theta_deg=0.0`, ref and wide still share one angle, exactly as before.
+  Verified: seed 7000 (no `--phase2`) still gives `scale=10.0`, unsigned `rotation_deg`, and
+  `solve.locate` on curated30 C00 (scales=None, the untouched Phase 1 path) still returns
+  `559.9038, 470.0009` -- matches the documented `559.904, 470.001` to the reported precision.
+- **Sign convention, verified empirically, not assumed** (the same standard this codebase already
+  held itself to for barrel distortion): built a synthetic layout with one marker off the rotation
+  pivot, rotated it via the actual rasterizer, and measured which way it moved. Result:
+  increasing `Layout.angle_deg` turns the rendered pattern **clockwise** (in the standard
+  CCW-positive sense). Documented inline in `raster.py`.
+- **`solve.py`**: rotation recovery previously had no refinement (unlike scale, which already had
+  `_refine_scale`) -- the existing `ANGLES` grid (2 deg steps, ±4°) was both too coarse and too
+  narrow for Phase 2's ±5° range and the ≤0.25°/0.5° pose tiers. Added `PHASE2_ANGLES` (a ±5°
+  bracket at 2.5° coarse steps) and `_refine_angle`, a golden-section refinement mirroring
+  `_refine_scale` almost exactly -- it reuses `_coarse_peak` with a one-element `angles` tuple as
+  the objective, so no new evaluator was needed. Wired into `_fine_score_full`'s scales-given
+  (Phase 2) branch only; the `scales=None` Phase 1 path and its `ANGLES` grid are untouched.
+  `route.predict_full` now passes `angles=solve.PHASE2_ANGLES` alongside `scales=solve.PHASE2_SCALES`.
+- **THETA_SIGN was wrong -- caught, not guessed around.** Generated 30 fresh Phase 2 pairs (own
+  generator, full aberration suite, real signed relative rotation) and compared recovered `theta`
+  (via `solve.locate(..., return_info=True)`) against the new ground truth. With the original
+  `THETA_SIGN=-1.0`: correlation -0.95, median abs error 3.35°. Flipping the sign
+  (`THETA_SIGN=+1.0`): correlation +0.95, median abs error 0.26°. Fixed in `solve.py`, with the
+  derivation and the caveat below recorded inline.
+- **Result on the well-localized subset of that 30-pair set** (19/30 within 5px -- see caveat
+  below on why this set's miss rate is high): median abs theta error **0.286°**; tiers ≤0.25°→37%,
+  ≤0.5°→74%, ≤1.0°→89%. Scale accuracy on the same pairs: median 0.98% error, consistent with
+  earlier (rotation-free) numbers -- the scale search is not disturbed by the new rotation axis.
+- **No localization regression from the new angle-refinement path**: curated30 (Phase 1 data)
+  scores identically (90% @5px, median 0.180px) whether the added `_refine_angle` path runs or
+  not -- confirmed by running the same call with and without `angles=PHASE2_ANGLES`.
+- **Honest caveat on the 30-pair set's miss rate (11/30, vs the ~88% solvable-only figure quoted
+  earlier for a rotation-free aberration set):** not a regression from this change -- confirmed by
+  the curated30 A/B above, which isolates the angle-search code path and shows no difference.
+  This is simply the FIRST test set with a genuine relative rotation actually present, stacked on
+  top of the existing scale + full aberration suite, and it is a small (n=30) sample with real
+  difficulty-tier variance (4/30 drew `below_floor`, unsolvable by construction). Read as "rotation
+  is a genuinely harder axis, worth a larger validation set," not as "the new code broke something."
+
+**Still open, honestly:** this validates that OUR OWN recovery pipeline agrees with OUR OWN
+generator's CCW-positive convention -- a real check that rules out a whole class of sign/pivot
+bugs, done the same way the barrel-distortion sign was verified (synthetic test, not assumption).
+It does **not** yet confirm our convention matches the organizers' definition of "CCW positive,
+about the match centre" -- that still needs their sample pairs' ground truth (expected ~29 Aug per
+the addendum timeline; not released as of this fix -- checked the WhatsApp transfers folder and
+Downloads directly, only the addendum PDF/transcript/CONTINUE_HERE.md are present). The moment
+their sample lands, re-run this same comparison against their labelled theta before trusting the
+sign on the scored submission.
+
+---
+
 **A "fix" that was tested and correctly REJECTED, with numbers, not intuition:** a regression check
 on curated30 (Phase 1 data) showed the hybrid's net path failing badly on one pair (`C26`, 528px
 miss -- a case CASES.md documents as a specific drift-shear stress test). The instinct was to add a

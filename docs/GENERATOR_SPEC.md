@@ -332,3 +332,34 @@ above): barrel distortion moves the landmark's *apparent position*, so the label
 the same forward map applied to the pixels — implemented and the sign convention verified empirically
 (not derived-and-trusted) against a synthetic test with a known landmark location. See
 `docs/PHASE2_RESEARCH_NOTES.md` for the validation numbers.
+
+29. **Scan distortion** (`driftsense/physics.py: scan_distortion_field`) — a smooth, low-frequency
+    2-D displacement field warping the wide capture, built from two low-frequency sinusoids. This
+    represents the *static spatial distortion* component of SEM raster scanning, documented as
+    distinct from time-varying drift (already cited separately, ref. 4/22 above): Cui et al.,
+    *Scanning Electron Microscope Calibration Using a Multi-Image Non-Linear Minimization Process*,
+    **Machining Science and Technology**, 2015, doi:10.1080/15599612.2015.1034903 (IRISA/Université
+    Rennes 1 Lagadic team; also an IEEE ICRA 2014 conference version, IEEE Xplore doc 6907621) —
+    which explicitly decomposes SEM image distortion into static spatial nonlinearity (from
+    raster-scan instabilities) versus temporally-varying drift, and calibrates the former with a
+    grating-based multi-image method. **Same honest framing as astigmatism/barrel/vignette/gamma
+    above:** the paper establishes that this class of distortion is real and documented, and
+    motivates modelling it as a smooth low-order spatial field rather than a single global shift —
+    it is not the source of our specific sinusoid parameterisation or amplitude range (max 6 px),
+    which are engineering choices tuned to be a visible but plausible warp on our own images, not a
+    fit to this paper's measured coefficients. Applied to the wide capture only (a *relative* warp
+    between reference and wide), gated off by default so Phase 1 pairs are unaffected; ground truth
+    is shifted by the field's value at the landmark, keeping the label exact under the warp
+    (validated in `docs/PHASE2_RESEARCH_NOTES.md`).
+
+30. **Absent pairs (Set C, `present=0`)** — rendered as a *different die region of the same
+    architecture*: the periodic arrays are kept, the landmark shapes are dropped, so the negative is
+    plausible and periodically similar rather than a random unrelated crop. This is a hard-negative
+    construction, not an arbitrary one: the design follows the standard rationale in the
+    Siamese/metric-learning literature that random or unrelated negatives are too easy and under-test
+    a rejection mechanism — see the general pair-construction discussion in Rosebrock, *Building
+    image pairs for siamese networks with Python*, PyImageSearch, 2020, and the broader hard-negative-
+    mining practice it summarises. The organizers' own description of Set C ("a different die region
+    of the same architecture... plausible and periodically similar") is itself a hard-negative
+    specification, which this generator implements directly rather than approximating with an easier
+    negative.

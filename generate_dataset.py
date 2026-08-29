@@ -81,17 +81,24 @@ def generate_one(seed: int, style: str | None, out_dir: pathlib.Path,
     # Phase 1 this is the fixed 10.0; in Phase 2 it is the sampled [8,12] value,
     # so the rendered pixels match the recorded ground-truth scale.
     if render_mode == "resize":
-        if scale_range is not None or absent:
-            raise ValueError("resize render-mode supports neither a scale range "
-                             "nor absent pairs; use physical mode")
+        if scale_range is not None or absent or signed_rotation:
+            raise ValueError("resize render-mode supports neither a scale range, "
+                             "absent pairs, nor signed (relative) rotation; use "
+                             "physical mode")
         mat_ref, fine_wide, gt, factor = make_pair_shared_canvas(
             layout, TARGET_NM, offset, n_px=n_px)
         ref = render(mat_ref, spec.ref, rng)
         wide = render_downsampled(fine_wide, factor, 1.0, spec.wide, rng)
     else:
+        # Phase 2 `theta`: reuse the existing signed-rotation draw (spec.rotation_deg,
+        # already CCW-signed when signed_rotation=True) as the WIDE-relative rotation
+        # to recover, rather than a rotation shared identically by both captures. When
+        # signed_rotation=False (Phase 1), relative_theta_deg is 0.0 and make_pair()'s
+        # behaviour is untouched -- ref and wide still share one layout.angle_deg.
+        rel_theta = spec.rotation_deg if signed_rotation else 0.0
         mat_ref, mat_wide, gt = make_pair(layout, TARGET_NM, offset,
                                           wide_px_nm=spec.wide.px_nm, n_px=n_px,
-                                          absent=absent)
+                                          absent=absent, relative_theta_deg=rel_theta)
         ref = render(mat_ref, spec.ref, rng)
         wide = render(mat_wide, spec.wide, rng)
 

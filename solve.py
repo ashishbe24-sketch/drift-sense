@@ -41,6 +41,14 @@ SCALE = 10          # wide is 10 nm/px, reference 1 nm/px -> known 10x gap (Phas
 # (scales=None) keeps the exact fixed-SCALE Phase 1 path, byte-for-byte.
 PHASE2_SCALES = tuple(float(s) for s in np.arange(8.0, 12.0001, 0.5))
 
+# Phase 2: the relative rotation is unknown in +/-5 deg (see PHASE2_UNDERSTANDING.md).
+# ANGLES below (+/-4 deg, Phase 1's tilt-noise bracket) is too narrow and too coarse
+# for the pose-recovery tiers (<=0.25/0.5 deg); this grid brackets the full +/-5 deg
+# range at coarse steps, then _refine_angle() golden-sections locally around the
+# winner. Used only by the scales-given (Phase 2) branch of _fine_score_full --
+# the scales=None Phase 1 path keeps its original ANGLES grid, untouched.
+PHASE2_ANGLES = tuple(float(a) for a in np.arange(-5.0, 5.0001, 2.5))
+
 # Multi-match tie-break, as a soft centre prior rather than a hard threshold.
 # Repeated landmarks sit >=100 px apart, so peaks are enumerated with an 80 px
 # non-max window. Among them the winner maximises (NCC - LAMBDA * dist/n_px):
@@ -250,6 +258,37 @@ def _refine_scale(cw, reference, s0, step, blurs, angles, iters=4):
     return float(s), float(blur), float(ang)
 
 
+def _refine_angle(cw, stamp_full, a0, step, blurs, iters=4):
+    """Golden-section refine of the rotation angle around a coarse winner a0 +/- step.
+
+    Same structure as _refine_scale, but the objective is the angle instead of
+    the zoom: _coarse_peak already accepts a one-element `angles` tuple and
+    returns the half-res peak NCC at that exact angle (best over blur), so no
+    new evaluator is needed -- only the golden-section bracket around it.
+    Returns (angle, blur) at the refined angle.
+    """
+    invphi = (np.sqrt(5.0) - 1.0) / 2.0
+    a, b = a0 - step, a0 + step
+    c = b - invphi * (b - a)
+    d = a + invphi * (b - a)
+    fc = _coarse_peak(cw, stamp_full, blurs, (c,))
+    fd = _coarse_peak(cw, stamp_full, blurs, (d,))
+    for _ in range(iters):
+        if fc[0] >= fd[0]:
+            b, d, fd = d, c, fc
+            c = b - invphi * (b - a)
+            fc = _coarse_peak(cw, stamp_full, blurs, (c,))
+        else:
+            a, c, fc = c, d, fd
+            d = a + invphi * (b - a)
+            fd = _coarse_peak(cw, stamp_full, blurs, (d,))
+    if fc[0] >= fd[0]:
+        ang = c; _, blur, _ = fc
+    else:
+        ang = d; _, blur, _ = fd
+    return float(ang), float(blur)
+
+
 def _fine_score_full(reference: np.ndarray, wide: np.ndarray,
                      blurs=BLURS, angles=ANGLES, scales=None):
     """The full-resolution correlation map, stamp geometry, and the recovered
@@ -290,6 +329,11 @@ def _fine_score_full(reference: np.ndarray, wide: np.ndarray,
         # recover the real blur/angle once, at the chosen scale, full grid
         stamp = _stamp_at_scale(reference, scale)
         _, blur, ang = _coarse_peak(cw, stamp, blurs, angles)
+        # refine the coarse-grid angle locally (golden section), the same
+        # treatment scale already gets above -- needed to reach the tight
+        # <=0.25/0.5 deg pose-recovery tiers, which the raw grid step cannot.
+        gstep_ang = (angles[1] - angles[0]) if len(angles) > 1 else 2.0
+        ang, blur = _refine_angle(cw, stamp, ang, gstep_ang, blurs)
 
     # fine pass -- full resolution, recovered setting
     score = ncc_map(wide, _make_variant(stamp, blur, ang))
@@ -340,11 +384,23 @@ def _subpixel(score, r, c):
 # Sign convention for the recovered rotation reported in Phase 2's `theta`
 # column (contract: degrees, CCW positive, about the match centre). `ANGLES`
 # are the angles the stamp is rotated by (via scipy ndrotate) to best match the
-# wide view; the wide view's apparent rotation of the reference is the opposite
-# sense. This factor makes the reported sign trivially flippable -- it MUST be
-# validated against the sample pairs' ground-truth theta the moment they land
-# (~29 Aug), since we cannot verify the sense without a labelled example.
-THETA_SIGN = -1.0
+# wide view.
+#
+# Fixed empirically, not assumed (29 Aug): with our own generator's new
+# relative-rotation ground truth (driftsense.raster.make_pair's
+# relative_theta_deg -- see PHASE2_RESEARCH_NOTES.md), generating 30 pairs with
+# a known signed rotation and comparing against solve.locate's recovered angle
+# gave correlation -0.95 with THETA_SIGN=-1.0 (median abs error 3.35 deg) and
+# +0.95 with THETA_SIGN=+1.0 (median abs error 0.26 deg) -- i.e. the original
+# guess had the wrong sign. Flipped here.
+#
+# CAVEAT, still open: this validates that our own recovery pipeline agrees with
+# our own generator's CCW-positive convention (a real, useful check -- it rules
+# out a whole class of bugs). It does NOT yet confirm our convention matches
+# the organizers' -- that needs their sample pairs' ground-truth theta
+# (expected ~29 Aug per the addendum timeline; not released as of this fix).
+# Re-verify against their sample the moment it lands.
+THETA_SIGN = 1.0
 
 
 def locate(reference: np.ndarray, wide: np.ndarray,

@@ -64,6 +64,14 @@ STAGE_SIGMA_UM = (0.7, 2.0)
 UNIFORM_PLACEMENT_FRACTION = 0.20
 
 ROTATION_DEG = (0.0, 5.0)       # webinar: "only 1 to 3 degrees", up to 5
+# Phase 1 (signed_rotation=False): rotation_deg is a magnitude-only draw applied
+# identically to both captures (raster.make_pair's relative_theta_deg stays 0) --
+# a shared "wafer tilt" both views see, which is why it "survives" unrecovered.
+# Phase 2 (signed_rotation=True): the same field becomes signed and CCW-positive,
+# and generate_dataset.py passes it to make_pair as relative_theta_deg -- i.e. it
+# is realised ONLY in the wide capture, relative to the reference. This is then
+# exactly the Phase 2 `theta` ground truth (about the match centre, since the
+# rasteriser's rotation pivot is the landmark = (gt_x, gt_y)'s nm coordinate).
 SCALE_JITTER = 0.20             # webinar: shrink or grow a polygon by 20%
 
 # Phase 2: the zoom ratio is no longer fixed at 10x. The addendum draws it

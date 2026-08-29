@@ -150,7 +150,8 @@ def capture(layout: Layout, centre_nm: tuple, px_nm: float, n_px: int = 1000,
 
 def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
               ref_px_nm: float = 1.0, wide_px_nm: float = 10.0,
-              n_px: int = 1000, supersample: int = 1, absent: bool = False):
+              n_px: int = 1000, supersample: int = 1, absent: bool = False,
+              relative_theta_deg: float = 0.0):
     """Render one (reference, wide) pair from a single layout.
 
     target_nm : nm coordinate of the site, normally the landmark centre
@@ -163,6 +164,25 @@ def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
                 region where the reference's unique site does not occur. The
                 returned gt is then meaningless (the caller marks it absent).
 
+    relative_theta_deg : Phase 2 `theta`. The wide capture's rotation relative
+                to the reference, CCW-positive, about the match centre. Default
+                0.0 renders wide at the same `layout.angle_deg` as the
+                reference -- exactly today's (Phase 1) behaviour, byte-for-byte.
+                Nonzero: rotate ONLY the wide render, about the same pivot the
+                rasteriser already uses for `layout.angle_deg` (Layout.centre_nm,
+                which is the landmark -- i.e. exactly (gt_x, gt_y)'s nm
+                coordinate). Because the pivot IS the ground-truth point, it is
+                a fixed point of the rotation, so gt_x/gt_y need no correction
+                here (unlike barrel/scan distortion, which shift a point that
+                is not the pivot).
+
+                Sign convention verified empirically against the rasteriser
+                (not assumed): increasing `layout.angle_deg` turns the rendered
+                pattern CLOCKWISE (see docs/PHASE2_RESEARCH_NOTES.md). So a
+                CCW-positive relative rotation of the wide is realised as
+                `layout.angle_deg -= relative_theta_deg` for the wide render
+                only.
+
     Returns (ref, wide, gt_xy) with gt in wide-image pixel coordinates,
     fractional and exact: it comes from the placement, never from the image.
     """
@@ -173,18 +193,25 @@ def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
     wide_origin = (target_nm[0] - gt_x * wide_px_nm,
                    target_nm[1] - gt_y * wide_px_nm)
 
-    if absent:
-        # Temporarily drop the landmark shapes for the wide render only; the
-        # periodic arrays (the architecture) stay, so the wide is periodically
-        # similar but contains no true instance. Restored immediately after.
-        saved_shapes = layout.shapes
-        layout.shapes = []
-        try:
+    saved_angle = layout.angle_deg
+    if relative_theta_deg != 0.0:
+        layout.angle_deg = saved_angle - relative_theta_deg
+    try:
+        if absent:
+            # Temporarily drop the landmark shapes for the wide render only;
+            # the periodic arrays (the architecture) stay, so the wide is
+            # periodically similar but contains no true instance. Restored
+            # immediately after.
+            saved_shapes = layout.shapes
+            layout.shapes = []
+            try:
+                wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
+            finally:
+                layout.shapes = saved_shapes
+        else:
             wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
-        finally:
-            layout.shapes = saved_shapes
-    else:
-        wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
+    finally:
+        layout.angle_deg = saved_angle
 
     assert ref.shape == (n_px, n_px), ref.shape
     assert wide.shape == (n_px, n_px), wide.shape

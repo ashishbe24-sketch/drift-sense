@@ -154,7 +154,7 @@ def predict_full(reference, wide, net=None, device="cpu",
     # Phase 2 runs on unknown zoom in [8,12], so the scale search is always on.
     # It recovers ~10 on nominal pairs and the true value off-nominal.
     x, y, info = solve.locate(reference, wide, return_info=True,
-                              scales=solve.PHASE2_SCALES)
+                              scales=solve.PHASE2_SCALES, angles=solve.PHASE2_ANGLES)
     if net is not None:
         try:
             from driftmatch.infer import net_response, predict_from_response
