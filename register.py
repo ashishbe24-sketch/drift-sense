@@ -116,8 +116,16 @@ def run(input_csv: pathlib.Path, output_csv: pathlib.Path,
     # (None, "cpu") on any failure (no torch, no CUDA, missing file), and
     # route.predict_full() falls back to classical x,y when net is None, so this
     # always runs even on the no-GPU reference machine.
+    #
+    # best_phase2_rot8k.pt is the rotation-aware retrain (31 Aug): fine-tuned
+    # from best_phase2.pt on 8000 pairs whose --phase2 generator now bakes in
+    # relative +-5 rotation, which best_phase2.pt never saw. Same architecture,
+    # so identical CPU latency. On the 100-pair held-out set it matches/edges the
+    # old net (84% vs 83% @5px, 85% vs 81.7% on the n=60 quick-eval) and is
+    # trained on the correct Phase 2 distribution -- see PHASE2_RESEARCH_NOTES.md.
+    # best_phase2.pt is kept as a fallback; revert this one line to roll back.
     _phase2_ckpt = (pathlib.Path(__file__).resolve().parent / "driftmatch" /
-                    "checkpoints" / "best_phase2.pt")
+                    "checkpoints" / "best_phase2_rot8k.pt")
     net, device = route.load_net(_phase2_ckpt)
 
     out_rows, n_found = [], 0

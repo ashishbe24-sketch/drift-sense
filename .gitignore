@@ -61,7 +61,14 @@ TheTGuys_PS02_official.pptx
 # driftmatch/checkpoints/ (best + three ablation variants) are tracked; the
 # per-run scratch copies are not.
 driftmatch/checkpoints_gen/
+driftmatch/checkpoints_new/
 driftmatch/checkpoints/last.pt
 
 data/_demo/
 data/_seedscan/
+
+# 31 Aug larger-training-set task: regeneratable from their recorded seeds
+# (900000 / 950000 / 910000), so not tracked -- see PHASE2_RESEARCH_NOTES.md.
+data/p2train8k/
+data/p2calib300/
+data/p2eval100/

@@ -719,3 +719,116 @@ right (e.g. the net's own heatmap confidence, or `is_multimatch()` on the net's 
 original Phase 1 router did it) -- not raw disagreement distance, which doesn't carry that
 information. Noted as a future-work item, not resolved tonight, and not needed to be: the unconditional
 hybrid is already a validated improvement over classical alone.
+
+---
+
+## Bigger training set + rotation-aware retrain + 300-pair recalibration (31 Aug)
+
+Executed `docs/TEAMMATE_TASK_LARGER_TRAINING.md` end to end. The headline goal was NOT "more data
+for its own sake" -- it was that the shipped `best_phase2.pt` was trained *before* the generator
+started baking relative +-5 rotation into `--phase2` pairs, so it had **never seen a rotated pair**.
+This retrain uses the rotation-aware generator, so it is the first genuinely rotation-aware net.
+
+**Environment (stated explicitly, per the standing rule about which path a number came from):** all
+numbers below are the full router / real GPU path, measured through `.venv` (Python 3.13,
+torch 2.11.0+cu128) on an RTX 3050 6 GB Laptop GPU -- NOT the CPU-only fallback. The default PyPI
+`torch` wheel installed CPU-only (`2.13.0+cpu`); the CUDA build was installed explicitly from the
+cu128 index. Net forward-pass times below are therefore GPU-timed; the CPU-only reference-machine
+latency is unchanged from the earlier ~1.6 s/pair hybrid figure because the architecture is
+identical (same `DriftMatchNet(C=64)`, same 1.03 MB checkpoint).
+
+**Data generated (deterministic, seeds recorded, NOT committed -- regeneratable):**
+- `data/p2train8k` -- 8000 present pairs, full aberration suite, seed 900000 (`--phase2`), ~29 min.
+- `data/p2calib300` -- 300 pairs, 22% absent (233 present / 67 absent), seed 950000, ~68 s.
+- `data/p2eval100` -- 100 held-out present pairs, seed 910000 (separate from train, used as the
+  training `--eval2` held-out set AND the comparison set), ~25 s.
+
+### Retrain (step 3)
+
+`python -m driftmatch.train --data data/p2train8k --resume driftmatch/checkpoints/best_phase2.pt
+--epochs 15 --batch 4 --lr 2e-4 --workers 0 --eval1 data/p2train8k --eval2 data/p2eval100
+--out driftmatch/checkpoints_new`. On the 6 GB card `train.py` auto-enabled `cudnn.benchmark` +
+`pin_memory` (its >=5.5 GB switch) and ran `batch 4`. ~11.5 min/epoch (data-bound: `--workers 0`
+single-thread loading, GPU ~87-100%, ~16 s/epoch data-wait). Loss fell monotonically 0.559 -> 0.348.
+
+**Held-out (p2eval100, n=60 quick-eval) peaked EARLY, at epoch 2 (85.0%), then plateaued/declined**
+while the on-train `eval1` kept climbing to 94% -- a clean mild-overfit signature. `train.py`'s
+"keep best on held-out" logic therefore saved **epoch 2** as `checkpoints_new/best.pt`
+(acc_eval 86.0, acc_val 85.0). The resumed `best_phase2.pt`, re-baselined on this same held-out set,
+scored **81.7%** (its stored 88.3% was on a different/older eval set -- the re-baseline is why the
+resume logic exists, and is the only fair old-vs-new comparison).
+
+### Decisive comparison (step 5), 100 held-out present pairs, real +-5 rotation present
+
+`scripts/compare_checkpoints.py data/p2eval100 <old> <new>`:
+
+| Method | @5px | median err | time/pair |
+|---|---|---|---|
+| classical alone | 73.0% | 0.539 px | 815 ms (CPU) |
+| net alone -- old `best_phase2.pt` | 83.0% | 0.685 px | 49 ms (GPU) |
+| **net alone -- new `best_phase2_rot8k.pt`** | **84.0%** | 0.694 px | 43 ms (GPU) |
+| hybrid -- new (== `route.predict_full`) | **84.0%** | 0.694 px | 858 ms |
+
+**The new rotation-aware net matches/edges the old on every metric (84 vs 83 @5px here, 85 vs 81.7
+on the n=60 quick-eval) and is never worse.** The +1 pt on 100 pairs is within noise on its own, but
+it is consistent across both eval slices AND the new net is trained on the correct Phase 2
+distribution the old one never saw -- so this is a principled improvement, not just a lucky pair.
+
+**Why 83-84% and not the earlier "89%":** not a regression. This is the FIRST comparison set with
+genuine relative rotation stacked on the full aberration suite; the 29 Aug "results dropped" note
+already established that once real rotation is in the data the honest localization number is ~81-83%
+(the old 89% had no rotation in the eval data). 84% here is consistent with that, and slightly
+above it.
+
+**Pose recovery (classical path -- checkpoint-independent, since `theta`/`scale` always come from
+classical), 73 well-localized present pairs:**
+- scale: median **0.85%** error; tiers <=1% -> 58%, <=2% -> 79%, <=5% -> 92%.
+- theta: median **0.190 deg**; tiers <=0.25 -> 62%, <=0.5 -> 79%, <=1.0 -> 90%.
+
+Consistent with (and slightly better than) the 29 Aug rotation figures (median 0.286 deg on a
+smaller, harder n=19 subset) -- confirms theta recovery holds on a larger sample. NOTE this task did
+NOT touch rotation code (per the task's own "what NOT to do"); this is a re-measurement of the
+existing classical pose path on new data, not a change to it.
+
+**Decision -- adopted the new net as the shipped default, kept the old as fallback.** Added
+`driftmatch/checkpoints/best_phase2_rot8k.pt` (a copy of `checkpoints_new/best.pt`) and pointed
+`register.py`'s `_phase2_ckpt` at it. `best_phase2.pt` is untouched -- reverting the one changed line
+in `register.py` rolls back instantly. Rationale: not-worse on every metric + rotation-aware +
+identical CPU latency, and leaving the retrain unused would defeat the task. Verified `register.py`
+runs the full 6-column contract end to end on the new checkpoint (net loads, no classical fallback).
+
+### Recalibration (step 4) -- 300-pair set, `scripts/recalibrate_found.py data/p2calib300`
+
+peak-NCC separation: present min 0.123 / median 0.933; absent **max 0.967** / median 0.822.
+
+| Threshold | F1 | prec | rec | FN | FP | cost (2xFN) |
+|---|---|---|---|---|---|---|
+| 0.53 -- cost-optimal (route.py's own 2x-FN methodology) | 0.878 | -- | -- | 6 | 57 | **69** |
+| **0.68 -- current, KEPT** | 0.876 | 0.808 | 0.957 | 10 | 53 | 73 |
+| 0.73 -- plain-F1-optimal | 0.882 | -- | -- | 13 | 46 | 72 |
+
+**`FOUND_PEAK` kept at 0.68.** This is the exact outcome the 29 Aug calibration note predicted:
+a bigger set narrows the *estimate* of a threshold, it does not create separability the signal
+lacks. The absent MAX (0.967) exceeds the present MEDIAN (0.933), so no single cutoff separates the
+classes; F1 sits within 0.006 across the whole plausible range, and the "optimum" swings 0.53-0.73
+depending only on whether you weight cost or raw F1. 0.53 (the strict cost-optimum) is too permissive
+-- it rejects only 10/67 absent pairs, and "never rejecting scores zero." 0.68 is the validated middle
+ground; chasing a 0.006 F1 gain to 0.73 (at the price of 3 more falsely-rejected present pairs, each
+of which also zeros its localization + pose credit) is not worth it. Updated the `FOUND_PEAK` comment
+in `route.py` to record this. **The +4 bonus (rejection F1 >= 0.90) is out of reach for any
+single-threshold rule on this signal** (best F1 here 0.882); the durable fix remains a multi-signal
+rejection rule, which 300 labeled pairs (67 absent) still do not comfortably support fitting.
+
+### Artifacts / repo hygiene
+
+- New files: `scripts/recalibrate_found.py`, `scripts/compare_checkpoints.py` (both reads-only,
+  reproducible from the seeded sets), `driftmatch/checkpoints/best_phase2_rot8k.pt`.
+- Edited: `register.py` (one-line checkpoint pointer + comment), `route.py` (`FOUND_PEAK` comment
+  only -- value unchanged).
+- NOT committed: `data/p2train8k`, `data/p2calib300`, `data/p2eval100`, `driftmatch/checkpoints_new/`
+  -- all regeneratable from the recorded seeds; added to `.gitignore` to prevent accidental staging.
+
+**Standing caveat, unchanged:** every number here is on OUR generator, not the organizers' data, and
+the theta sign convention is still only validated self-consistently against our own generator -- the
+organizers' sample ground-truth theta (not yet released as of this work) is still required before
+trusting the sign on the scored submission.

@@ -102,6 +102,21 @@ def locate(reference, wide, net=None, device="cpu", ratio=MULTI_RATIO):
 # 0.006 -- a thin margin, not a robust one; a better long-term fix is a
 # multi-signal rejection score, not a single-threshold peak cutoff.
 # `solve.locate` still returns `distinct`/`second_ratio` for that future work.
+#
+# 31 Aug -- RECALIBRATED on a 5x-larger set (300 pairs, 233 present / 67 absent,
+# 22% absent, seed 950000) via scripts/recalibrate_found.py. Finding: the
+# threshold is NOT meaningfully improvable, confirming the separability-ceiling
+# note in PHASE2_RESEARCH_NOTES.md. On this set the absent peak-NCC MAX (0.967)
+# exceeds the present MEDIAN (0.933), so no single cutoff cleanly separates the
+# classes. F1 sits within 0.006 across the whole plausible range: cost-optimal
+# (2x FN weight, this comment's own methodology) lands at 0.53 (F1 0.878, but it
+# rejects only 10/67 absent -- too permissive), plain-F1-optimal at 0.73 (F1
+# 0.882, FN 13), and the current 0.68 (F1 0.876) sits between them. Because the
+# "optimum" swings 0.53-0.73 depending only on the weighting and the F1 gain is
+# noise, 0.68 is KEPT as the validated middle operating point rather than chasing
+# a 0.006 improvement. The real fix remains a multi-signal rejection rule (peak +
+# second_ratio/distinct, or the net's own heatmap), which 300 labeled pairs still
+# do not comfortably support fitting -- see the research notes.
 FOUND_PEAK = 0.68
 
 
