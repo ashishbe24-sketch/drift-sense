@@ -53,7 +53,7 @@ from PIL import Image
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from driftsense.physics import render, render_downsampled
 from driftsense.raster import make_pair, make_pair_shared_canvas
-from driftsense.sampling import build_layout, sample_spec, SCALE_RANGE
+from driftsense.sampling import build_layout, sample_spec, SCALE_RANGE, REGIMES
 
 VERSION = "0.1.0"
 N_PX = 1000
@@ -96,9 +96,36 @@ def generate_one(seed: int, style: str | None, out_dir: pathlib.Path,
         # signed_rotation=False (Phase 1), relative_theta_deg is 0.0 and make_pair()'s
         # behaviour is untouched -- ref and wide still share one layout.angle_deg.
         rel_theta = spec.rotation_deg if signed_rotation else 0.0
+        wide_layout = None
+        if absent:
+            # Set C decoy: an independently instantiated layout of the SAME
+            # architecture family (style) and SAME pitch regime as the reference,
+            # but with its own pitch value, phase, edge roughness and landmark
+            # lattice -- a genuinely different die region. Its pitch is redrawn
+            # within the reference's regime band (deterministically from the pair
+            # seed) so the decoy is the same feature scale -- a genuine hard
+            # negative with no trivial pitch-outlier tell -- while differing from
+            # the reference pitch enough that the two periodic lattices do not
+            # co-register. (A phase-only shift at IDENTICAL pitch still correlates
+            # cleanly at the shifted position; that, plus the old landmark-strip
+            # of the reference's own layout, was the artificially-high-peak bug --
+            # Applied Materials generator spec, Section 4.)
+            decoy_spec = sample_spec(seed ^ 0xDEC0, style=spec.style, n_px=n_px,
+                                     wide_px_nm=spec.wide.px_nm,
+                                     scale_range=scale_range,
+                                     signed_rotation=signed_rotation, absent=False,
+                                     scan_distortion_max=scan_distortion_max,
+                                     optical_aberrations=optical_aberrations)
+            band = REGIMES[spec.regime]["pitch_nm"]
+            decoy_spec.regime = spec.regime
+            decoy_spec.pitch_nm = float(
+                np.random.default_rng(seed ^ 0xDEC0BA5E).uniform(*band))
+            wide_layout = build_layout(decoy_spec, target_nm=TARGET_NM,
+                                       extent_nm=EXTENT_NM)
         mat_ref, mat_wide, gt = make_pair(layout, TARGET_NM, offset,
                                           wide_px_nm=spec.wide.px_nm, n_px=n_px,
-                                          absent=absent, relative_theta_deg=rel_theta)
+                                          absent=absent, relative_theta_deg=rel_theta,
+                                          wide_layout=wide_layout)
         ref = render(mat_ref, spec.ref, rng)
         wide = render(mat_wide, spec.wide, rng)
 

@@ -103,20 +103,28 @@ def locate(reference, wide, net=None, device="cpu", ratio=MULTI_RATIO):
 # multi-signal rejection score, not a single-threshold peak cutoff.
 # `solve.locate` still returns `distinct`/`second_ratio` for that future work.
 #
-# 31 Aug -- RECALIBRATED on a 5x-larger set (300 pairs, 233 present / 67 absent,
-# 22% absent, seed 950000) via scripts/recalibrate_found.py. Finding: the
-# threshold is NOT meaningfully improvable, confirming the separability-ceiling
-# note in PHASE2_RESEARCH_NOTES.md. On this set the absent peak-NCC MAX (0.967)
-# exceeds the present MEDIAN (0.933), so no single cutoff cleanly separates the
-# classes. F1 sits within 0.006 across the whole plausible range: cost-optimal
-# (2x FN weight, this comment's own methodology) lands at 0.53 (F1 0.878, but it
-# rejects only 10/67 absent -- too permissive), plain-F1-optimal at 0.73 (F1
-# 0.882, FN 13), and the current 0.68 (F1 0.876) sits between them. Because the
-# "optimum" swings 0.53-0.73 depending only on the weighting and the F1 gain is
-# noise, 0.68 is KEPT as the validated middle operating point rather than chasing
-# a 0.006 improvement. The real fix remains a multi-signal rejection rule (peak +
-# second_ratio/distinct, or the net's own heatmap), which 300 labeled pairs still
-# do not comfortably support fitting -- see the research notes.
+# 31 Aug -- recalibrated on a 300-pair set (seed 950000); at the time the
+# threshold looked NOT meaningfully improvable (F1 ~0.88, absent max 0.967 >
+# present median 0.933) and that was read as a "separability ceiling." THAT WAS
+# WRONG -- see the next note; the ceiling was a generator bug, not a signal limit.
+#
+# 1 Sep -- SET C GENERATOR BUG FIXED, then re-swept. The absent wide had been
+# rendered from the reference's OWN layout with the landmark stripped, so the two
+# periodic backgrounds were byte-identical and a periodic template matched the
+# decoy cleanly -- artificially high absent peaks (Applied Materials generator
+# spec, Section 4). Fixed in driftsense: absent wides now render from an
+# independently instantiated same-family, same-band decoy layout whose lattice
+# does not co-register. Re-measured on the corrected seed-950000 set: absent peak
+# median 0.822 -> 0.533, max 0.967 -> 0.877 (present distribution UNCHANGED), so
+# absent max now sits BELOW the present median -- clean separation. Raw peak-NCC
+# AUC 0.789 -> 0.945; the auxiliary signals (distinct 0.78, second_ratio 0.70)
+# are now WORSE than raw peak, so a multi-signal rule is NOT needed -- raw peak
+# alone separates the classes. Re-swept cost-optimal threshold: **0.68 is cost-
+# optimal on the corrected data too** (F1 0.939, FN 10, FP 19), so the value is
+# unchanged -- but it is now a genuinely good operating point, not a provisional
+# middle ground. On a FRESH set (seed 960000) rejection F1(present+) = 0.932, so
+# the +4 bonus (F1 >= 0.90) is reachable under that convention (macro 0.860,
+# absent+ 0.789 -- still real hard negatives, not a saturated/leaky 0.99).
 FOUND_PEAK = 0.68
 
 

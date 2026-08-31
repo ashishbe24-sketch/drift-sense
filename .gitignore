@@ -79,3 +79,6 @@ data/p2test150/
 data/fmt_calib20/
 data/fmt_calib60/
 data/fmt_test200/
+
+# Set C absent-pair fix: fresh rejection test set, regeneratable from seed 960000.
+data/p2reject_test300/

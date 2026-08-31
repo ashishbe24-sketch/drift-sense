@@ -151,18 +151,31 @@ def capture(layout: Layout, centre_nm: tuple, px_nm: float, n_px: int = 1000,
 def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
               ref_px_nm: float = 1.0, wide_px_nm: float = 10.0,
               n_px: int = 1000, supersample: int = 1, absent: bool = False,
-              relative_theta_deg: float = 0.0):
+              relative_theta_deg: float = 0.0, wide_layout: Layout = None):
     """Render one (reference, wide) pair from a single layout.
 
     target_nm : nm coordinate of the site, normally the landmark centre
     offset_px : where the site lands in the wide image, as an offset in wide
                 pixels from the wide image centre -- the stage navigation error
 
-    absent    : Phase 2 Set C. The reference is rendered with its landmark, but
-                the wide view is rendered from the same layout with the landmark
-                shapes removed -- the same periodic architecture, a different die
-                region where the reference's unique site does not occur. The
-                returned gt is then meaningless (the caller marks it absent).
+    absent    : Phase 2 Set C. The reference is rendered with its landmark; the
+                wide view contains no true instance of it.
+
+                Pass `wide_layout` (an independently instantiated layout of the
+                SAME architecture family, with its own pitch/phase/roughness and
+                its own landmark lattice) and the wide is rendered from THAT --
+                a genuinely different die region whose periodic lattice does not
+                co-register with the reference's. This is the correct Set C
+                decoy: a landmark-stripped render of the reference's OWN layout
+                (the `wide_layout is None` fallback below) leaves the two
+                periodic backgrounds byte-identical, so a periodic template
+                matches the decoy cleanly and absent pairs score artificially
+                high peaks (Applied Materials generator spec, Section 4). The
+                fallback is kept only for callers that predate this argument;
+                generate_dataset always passes `wide_layout` for absent pairs.
+
+                The returned gt is meaningless for absent pairs (the caller
+                marks it absent).
 
     relative_theta_deg : Phase 2 `theta`. The wide capture's rotation relative
                 to the reference, CCW-positive, about the match centre. Default
@@ -193,25 +206,38 @@ def make_pair(layout: Layout, target_nm: tuple, offset_px: tuple,
     wide_origin = (target_nm[0] - gt_x * wide_px_nm,
                    target_nm[1] - gt_y * wide_px_nm)
 
-    saved_angle = layout.angle_deg
-    if relative_theta_deg != 0.0:
-        layout.angle_deg = saved_angle - relative_theta_deg
-    try:
-        if absent:
-            # Temporarily drop the landmark shapes for the wide render only;
-            # the periodic arrays (the architecture) stay, so the wide is
-            # periodically similar but contains no true instance. Restored
-            # immediately after.
-            saved_shapes = layout.shapes
-            layout.shapes = []
-            try:
+    if absent and wide_layout is not None:
+        # Corrected Set C: render the wide from the independent same-family decoy
+        # layout. Its rotation is set to the reference's own tilt minus the SAME
+        # relative_theta a present wide uses, so absent and present wides share
+        # one +/-5deg relative-rotation distribution -- otherwise the decoy's
+        # wider apparent rotation would itself be a detectable absent signature.
+        saved_decoy_angle = wide_layout.angle_deg
+        wide_layout.angle_deg = layout.angle_deg - relative_theta_deg
+        try:
+            wide = rasterize(wide_layout, wide_origin, wide_px_nm, n_px, supersample)
+        finally:
+            wide_layout.angle_deg = saved_decoy_angle
+    else:
+        saved_angle = layout.angle_deg
+        if relative_theta_deg != 0.0:
+            layout.angle_deg = saved_angle - relative_theta_deg
+        try:
+            if absent:
+                # Legacy fallback (no wide_layout given): the periodic arrays are
+                # the reference's own, only the landmark shapes dropped. Kept for
+                # backward compatibility; NOT used by generate_dataset after the
+                # Set C fix, because it leaves the backgrounds byte-identical.
+                saved_shapes = layout.shapes
+                layout.shapes = []
+                try:
+                    wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
+                finally:
+                    layout.shapes = saved_shapes
+            else:
                 wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
-            finally:
-                layout.shapes = saved_shapes
-        else:
-            wide = rasterize(layout, wide_origin, wide_px_nm, n_px, supersample)
-    finally:
-        layout.angle_deg = saved_angle
+        finally:
+            layout.angle_deg = saved_angle
 
     assert ref.shape == (n_px, n_px), ref.shape
     assert wide.shape == (n_px, n_px), wide.shape

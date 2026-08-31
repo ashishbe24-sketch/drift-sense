@@ -579,6 +579,13 @@ sklearn dependency, matches the standard Mann-Whitney U formulation):
 | score -> localized <=5px \| present (score as localization confidence) | 0.615 |
 | **score -> overall correctness (the literal rubric metric)** | **0.657** |
 
+> **SUPERSEDED (1 Sep):** the "signal-separability ceiling" conclusion below was drawn from data
+> produced by a Set C generator BUG (absent wides rendered from the reference's own layout with the
+> landmark stripped, so the periodic backgrounds were byte-identical). It was NOT a signal limit.
+> After fixing the generator, raw peak-NCC AUC went 0.789 -> 0.945 and rejection F1 0.88 -> 0.93 --
+> see the "Set C absent-pair generator bug fixed" entry at the end of this document. The analysis
+> below is kept as the honest record of what the broken data looked like and why it misled us.
+
 0.657 is mediocre for a calibration signal. Digging into why (not just reporting the number)
 surfaced a real problem, larger than calibration noise: **rejection separability itself breaks
 down on "resolved"-regime absent pairs** -- the most common pitch regime by design weight (60%).
@@ -807,6 +814,10 @@ peak-NCC separation: present min 0.123 / median 0.933; absent **max 0.967** / me
 | **0.68 -- current, KEPT** | 0.876 | 0.808 | 0.957 | 10 | 53 | 73 |
 | 0.73 -- plain-F1-optimal | 0.882 | -- | -- | 13 | 46 | 72 |
 
+> **SUPERSEDED (1 Sep):** this table and the "separability ceiling" reasoning below were measured on
+> the SAME broken Set C data. After the generator fix, F1 at 0.68 rose 0.876 -> 0.939 on this very
+> seed-950000 set and 0.68 became the cost-optimum outright -- see the final entry. Kept as record.
+
 **`FOUND_PEAK` kept at 0.68.** This is the exact outcome the 29 Aug calibration note predicted:
 a bigger set narrows the *estimate* of a threshold, it does not create separability the signal
 lacks. The absent MAX (0.967) exceeds the present MEDIAN (0.933), so no single cutoff separates the
@@ -969,3 +980,117 @@ pursued further given the remaining time before submission and the higher-priori
 **Not committed:** `data/fmt_calib20/`, `data/fmt_calib60/`, `data/fmt_test200/` -- regeneratable
 from seeds 810500 / 810600 / 810000, added to `.gitignore`. Committed: `fmt_pose.py`,
 `scripts/eval_fmt.py`, this entry -- `solve.py`/`route.py` untouched, per the task's isolation rule.
+
+---
+
+## Set C absent-pair generator bug fixed -- the "separability ceiling" was ours, not the signal's (1 Sep)
+
+Executed `docs/TEAMMATE_TASK_ABSENT_PAIR_FIX.md`. **This reverses the 29 Aug "signal-separability
+ceiling" conclusion**: it was never a signal limit, it was a generator defect. Applied Materials'
+own Phase 2 generator spec (Section 4, shared 31 Aug) warns verbatim that cutting the decoy from a
+canvas with the *same zone geometry* makes absent pairs score *higher* peaks than present ones. Our
+generator did exactly that.
+
+**The bug.** `driftsense/raster.py::make_pair(absent=True)` rendered the absent wide from the
+reference's OWN `Layout`, only stripping the landmark shapes (`layout.shapes = []`). The periodic
+arrays -- pitch, phase, roughness, everything -- were byte-identical to the reference's background,
+so the reference's periodic surround matched the decoy *perfectly at a shifted position*. That, not
+any property of NCC, produced the artificially-high absent peaks.
+
+**The fix (generator only; localization/pose/net untouched).** Absent wides now render from an
+**independently instantiated decoy `Layout` of the same architecture family**, built in
+`generate_dataset.py`'s absent branch and passed to `make_pair` via a new `wide_layout=` argument
+(when given, the reference renders from `layout`, the wide from `wide_layout`, which keeps its OWN
+landmark lattice -- a landmark-stripped render is itself a detectable signature the spec warns
+against). Decoy design:
+- **Same family:** `style` forced equal to the reference (`dram`/`finfet` never switched).
+- **Same pitch regime/band:** decoy `regime = spec.regime`, pitch redrawn within that band -- so the
+  decoy is the same feature scale (a genuine hard negative, no trivial pitch-outlier tell).
+- **Different lattice:** the redrawn pitch differs from the reference's, so the two lattices do NOT
+  co-register. Critical subtlety: a phase-only shift at *identical* pitch would still correlate
+  cleanly at the shifted position -- the pitch itself must differ. Phase, roughness and jitter also
+  differ (decoy layout seed = `spec.seed ^ 0xDEC0`, pitch draw = `spec.seed ^ 0xDEC0BA5E`), fully
+  deterministic so the set still reproduces from `--seed`.
+- **Same rotation distribution:** the decoy wide is rendered at the reference's tilt minus the same
+  relative-theta a present wide uses, so absent and present wides share one +-5deg relative-rotation
+  distribution (otherwise a wider absent rotation would itself leak).
+
+**Systematic-signature self-audit (spec Section 4 requires this).** After the fix, what could a
+solver exploit to detect absent pairs *other than* the intended low correlation? Family, pitch band,
+noise/aberration channel (applied via `spec.wide`, identical to present), rotation range, and the
+presence of a centre landmark are all matched between present and absent. The one remaining
+difference is the intended, physical one: the decoy's periodic phase and exact pitch are uncorrelated
+with the reference's -- i.e. it is genuinely a different die region. There is no artificial tell such
+as "landmark missing from centre" or "decoys are noisier." Residual honest hardness: a few decoys
+whose redrawn pitch lands close to the reference's still score high peaks (absent max 0.877 on calib,
+0.933 on the fresh set), which is exactly why F1 is ~0.93, not a saturated 0.99.
+
+### Step 1 -- before/after peak distribution, same seed-950000 set (apples-to-apples)
+
+| | present min / median / max | absent min / median / max | absent max < present median? |
+|---|---|---|---|
+| **before (bug)** | 0.123 / 0.933 / 0.989 | 0.053 / 0.822 / **0.967** | NO -- 0.967 >= 0.933 |
+| **after (fixed)** | 0.123 / 0.933 / 0.989 | 0.034 / **0.533** / **0.877** | **YES -- 0.877 < 0.933, CLEAN** |
+
+The present distribution is **identical** before and after (min/median/max unchanged) -- the fix
+touched only absent pairs, as intended. Absent peaks collapsed (median 0.822 -> 0.533).
+
+### Step 2 -- re-swept `FOUND_PEAK`: KEPT at 0.68
+
+On the corrected seed-950000 set, `scripts/recalibrate_found.py`: at 0.68, F1 **0.939** (was 0.876
+on the broken data), FN 10, FP 19, cost 39 (was 73). **0.68 is the cost-optimum outright now** (2x
+FN weight), so the value is unchanged -- but it is now a genuinely good operating point, not the
+provisional middle-ground it was on the broken data. (Plain-F1-optimum 0.71 gives 0.940, +0.001 --
+noise.) No `FOUND_PEAK` value change; comment updated to record this.
+
+### Step 3 -- per-signal AUC on corrected data: raw peak alone now wins
+
+| signal (higher = more present) | AUC before (bug) | AUC after (fixed) |
+|---|---|---|
+| **raw peak NCC** | 0.789 | **0.945** (calib) / **0.947** (fresh) |
+| distinct (`peak * (1 - second_ratio)`) | 0.830 | 0.781 / 0.799 |
+| 1 - second_ratio | 0.793 | 0.705 / 0.711 |
+
+On the broken data `distinct` beat raw peak (0.830 > 0.789) -- which is *why* a multi-signal rule
+looked necessary. On the corrected data **raw peak is decisively best and the auxiliary signals are
+worse**, so the multi-signal rule is NOT needed -- ship raw peak (which is exactly what `route.py`
+already does). The 29 Aug PSR/second_ratio negative results were correct *about the broken data* and
+are now moot.
+
+### Step 5 -- full rubric score, FRESH unused set (seed 960000, 219 present / 81 absent)
+
+`scripts/score_phase2.py data/p2reject_test300 --ckpt driftmatch/checkpoints/best_phase2_rot8k.pt`:
+
+| rubric line | before (bug, ~) | after (fixed, fresh set) |
+|---|---|---|
+| **Rejection F1 (15)** | ~0.88 | **13.97 / 15**, F1(present+) **0.932**, macro 0.860, absent+ 0.789 |
+| Calibration AUC (10) | ~0.66 | 6.12 / 10, AUC 0.612 |
+| Localization (40) | -- | 33.06 / 40 (85.8% @5px) -- unchanged, checkpoint-independent |
+
+Fresh-set peak separation is CLEAN too (absent max 0.933 < present median 0.942, raw peak AUC 0.947).
+
+**+4 bonus (rejection F1 >= 0.90) verdict:** **reachable under the present+ convention (0.932), on a
+fresh set** -- it was declared out of reach on the broken data. It is NOT yet reachable under macro
+(0.860) or absent+ (0.789), because a handful of same-band decoys still slip through and FP hurts the
+smaller absent class hardest. Reporting all three per the Q2 ambiguity. This is a real improvement
+(F1 0.88 -> 0.93, AUC 0.79 -> 0.95), **not** a saturated/leaky 0.99 -- the red-flag check passes.
+
+**Calibration AUC** did NOT improve (0.66 -> 0.61, roughly flat/slightly down). Honest read: `score`
+is raw peak, which now separates present/absent superbly (great for rejection) but is a weak
+localization-confidence on present pairs, and the calibration metric mixes both. Improving `score`
+as a calibration signal is separate future work, out of this task's Set C scope.
+
+### Phase 1 byte-identity regression gate -- PASSED
+
+- seed 7000 (no `--phase2`) still renders `scale=10.0` (present path untouched; the fix is gated on
+  `absent and wide_layout is not None`).
+- `solve.locate` on curated30 C00 still returns **559.904, 470.001** (exact match to the documented
+  Phase 1 recovery). `solve.py` was not touched.
+
+### Files
+
+- Edited: `driftsense/raster.py` (`make_pair` gains `wide_layout=`), `generate_dataset.py` (absent
+  branch builds the decoy layout), `route.py` (`FOUND_PEAK` comment only; value unchanged at 0.68).
+- New: `scripts/measure_reject_signals.py` (before/after distribution + per-signal AUC).
+- Old "separability ceiling" entries annotated as superseded (not deleted -- honest record).
+- NOT committed: `data/p2calib300` (regenerated), `data/p2reject_test300` (seed 960000) -- gitignored.
