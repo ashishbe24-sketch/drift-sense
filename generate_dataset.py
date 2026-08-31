@@ -66,12 +66,14 @@ def generate_one(seed: int, style: str | None, out_dir: pathlib.Path,
                  n_px: int = N_PX, render_mode: str = "physical",
                  scale_range: tuple | None = None, signed_rotation: bool = False,
                  absent: bool = False, scan_distortion_max: float = 0.0,
-                 optical_aberrations: bool = False):
+                 optical_aberrations: bool = False,
+                 speckle: bool = False, salt_pepper: bool = False):
     """Render and write one pair. Returns the manifest row."""
     spec = sample_spec(seed, style=style, n_px=n_px, scale_range=scale_range,
                        signed_rotation=signed_rotation, absent=absent,
                        scan_distortion_max=scan_distortion_max,
-                       optical_aberrations=optical_aberrations)
+                       optical_aberrations=optical_aberrations,
+                       speckle=speckle, salt_pepper=salt_pepper)
     layout = build_layout(spec, target_nm=TARGET_NM, extent_nm=EXTENT_NM)
 
     offset = (spec.gt_x - n_px / 2.0, spec.gt_y - n_px / 2.0)
@@ -194,6 +196,7 @@ COLUMNS = ["pair_id", "ref_path", "wide_path", "gt_x", "gt_y", "scale", "style",
            "ref_blur_nm", "wide_blur_nm", "ref_dose", "wide_dose",
            "wide_charging", "wide_scan_distortion_px", "wide_astig_sigma_nm",
            "wide_astig_angle_deg", "wide_barrel_k1", "wide_vignette", "wide_gamma",
+           "wide_speckle_sigma", "wide_sp_fraction",
            "ref_drift_nm", "wide_drift_nm",
            "ref_vib_nm", "wide_vib_nm", "render_mode", "seed"]
 
@@ -233,17 +236,27 @@ def main():
     ap.add_argument("--optical-aberrations", action="store_true",
                     help="enable astigmatism/barrel/vignette/gamma (Set B "
                          "realism); --phase2 enables this by default")
+    ap.add_argument("--speckle", action="store_true",
+                    help="enable multiplicative speckle noise on the wide capture; "
+                         "--phase2 enables this by default")
+    ap.add_argument("--salt-pepper", dest="salt_pepper", action="store_true",
+                    help="enable salt-and-pepper impulse noise on the wide "
+                         "capture; --phase2 enables this by default")
     a = ap.parse_args()
 
     scale_range = None
     signed_rotation = False
     scan_distortion_max = a.scan_distortion
     optical_aberrations = a.optical_aberrations
+    speckle = a.speckle
+    salt_pepper = a.salt_pepper
     if a.phase2:
         scale_range, signed_rotation = SCALE_RANGE, True
         if scan_distortion_max == 0.0:
             scan_distortion_max = 6.0
         optical_aberrations = True
+        speckle = True
+        salt_pepper = True
     if a.scale_range is not None:
         scale_range = tuple(a.scale_range)
 
@@ -270,7 +283,8 @@ def main():
 
     t0 = time.perf_counter()
     jobs = [(s, style, a.out, N_PX, a.render_mode, scale_range, signed_rotation,
-             _is_absent(s), scan_distortion_max, optical_aberrations) for s in seeds]
+             _is_absent(s), scan_distortion_max, optical_aberrations,
+             speckle, salt_pepper) for s in seeds]
     if workers > 1:
         with ProcessPoolExecutor(max_workers=workers) as ex:
             rows = list(ex.map(_worker, jobs, chunksize=1))

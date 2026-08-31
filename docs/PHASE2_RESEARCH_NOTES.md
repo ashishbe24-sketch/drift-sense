@@ -1094,3 +1094,67 @@ as a calibration signal is separate future work, out of this task's Set C scope.
 - New: `scripts/measure_reject_signals.py` (before/after distribution + per-signal AUC).
 - Old "separability ceiling" entries annotated as superseded (not deleted -- honest record).
 - NOT committed: `data/p2calib300` (regenerated), `data/p2reject_test300` (seed 960000) -- gitignored.
+
+---
+
+## Two missing degradation categories added (speckle + salt-and-pepper), then one retrain (1 Sep)
+
+Executed `docs/TEAMMATE_TASK_NOISE_COVERAGE.md`. **Not "more data"** (8k pairs already plateaued vs
+the smaller set) -- these are **new physics categories the net had never seen**, which is the one
+lever that measurably worked before (29 Aug: adding barrel/astigmatism/scan distortion is what made
+the net win on the harder domain). A grep of `driftsense/physics.py` confirmed the generator modelled
+neither multiplicative speckle nor salt-and-pepper impulse noise, while Applied Materials' own Phase 2
+generator spec lists `add_speckle_noise`/`add_salt_and_pepper_noise` as reusable functions and two
+independent competitor generators both name multiplicative speckle. Same move as the aberration suite,
+two new categories.
+
+**Added (generator only; localization/pose/rejection/FOUND_PEAK untouched):**
+- `physics.py::apply_speckle` -- multiplicative, `I_out = I_in*(1 + n)`, `n ~ N(0, sigma^2)`, wide
+  capture, before photon counting (signal-dependent, unlike additive read noise).
+- `physics.py::apply_salt_pepper` -- impulse; a small fraction of wide pixels forced to 0/255
+  (dead/saturated detector pixels), applied last (a stuck pixel overrides the signal).
+- Both gated (`speckle_sigma`/`sp_fraction` default 0) and, crucially, draw NOTHING from `rng` when
+  off, so Phase 1 is byte-identical. Wired into `sampling.py` (per-pair draws: speckle sigma in
+  [0.03, 0.12] on ~50% of enabled pairs, S&P fraction in [0.001, 0.01] on ~40%), new manifest columns
+  `wide_speckle_sigma`/`wide_sp_fraction`, and `--speckle`/`--salt-pepper` CLI flags (both on by
+  default under `--phase2`, like the existing aberrations). Citation added to `GENERATOR_SPEC.md`
+  section 8.1 (entries 31-32) in the honest ledger style: standard textbook noise models (Goldstein
+  et al. taxonomy), NOT measured SEM parameters -- ranges are engineering choices.
+
+**Regression gate (mandatory) PASSED, proven byte-for-byte:** generated seed 7000 (no `--phase2`)
+with the new code, stashed only the three generator files, regenerated with the old code, and diffed
+the PNGs -- **all four images (2 pairs x ref/wide) byte-identical** (md5 match). curated30 C00
+`solve.locate` still returns `559.904, 470.001`.
+
+**Data (gitignored):** `p2train_speckle4k` (4000, seed 970000; 49% carry speckle, 41% S&P),
+`p2eval_speckle100` (100, seed 980000).
+
+**Retrain (warm-started, 10 epochs, lr 1.5e-4, from `best_phase2_rot8k.pt`):** loss 0.565 -> 0.430;
+held-out (n=60) best at epoch 4 (83.3%), saved. The resumed rot8k net re-baselined on this NOISY eval
+scored only 78.3% -- i.e. the unseen speckle/S&P genuinely degrades it, which is the gap this closes.
+
+**Decisive comparison (`scripts/compare_checkpoints.py`), full 100-pair sets, localization @5px:**
+
+| eval set | classical | net old (`rot8k`) | net new (`speckle`) | new - old |
+|---|---|---|---|---|
+| **`p2eval_speckle100` (noisy)** | 66.0% | 77.0% | **82.0%** | **+5.0 pp** |
+| `p2eval100` (clean, regression check) | 73.0% | 84.0% | 82.0% | -2.0 pp (within noise) |
+
+**Decision -- ADOPT the speckle net** (`register.py` now ships `best_phase2_speckle.pt`;
+`best_phase2_rot8k.pt` and `best_phase2.pt` kept as fallbacks, one-line revert). The ≥5pp rule fires
+on the fresh noisy eval (+5.0 pp, consistent with the +5 pp n=60 slice). The clean-eval -2 pp is
+inside the 5pp tie band -- not a real regression -- and the net now sits at a uniform 82% on BOTH
+clean and noisy pairs, i.e. it traded a within-noise clean edge for genuine robustness to the two new
+categories. Same architecture, identical CPU latency; pose/rejection/FOUND_PEAK unchanged
+(checkpoint-independent).
+
+**Honest caveat:** the disclosed Set B categories are charging/scan-distortion/defocus/shot-noise/
+polygon-scaling; speckle+S&P are inferred from AMAT's *reference-pipeline function list* and
+competitor generators, not confirmed present in the blind set. If the blind set has no speckle/S&P,
+the relevant number is the clean eval (a -2 pp wash). Adoption is the robust hedge -- uniform 82%
+either way -- but it is a hedge on an unconfirmed distribution, recorded plainly. The generator +
+citation value (the 10-pt bucket) stands regardless of the retrain outcome, per the task's own note.
+
+**Files:** edited `driftsense/physics.py`, `driftsense/sampling.py`, `generate_dataset.py`,
+`register.py`, `docs/GENERATOR_SPEC.md`; new checkpoint `best_phase2_speckle.pt`. Datasets and
+`checkpoints_speckle/` gitignored. No `solve.py`/`route.py`/theta/scale/FOUND_PEAK change.

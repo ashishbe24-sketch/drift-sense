@@ -70,6 +70,8 @@ class CaptureParams:
     barrel_k1: float = 0.0              # radial lens distortion coefficient
     vignette_strength: float = 0.0      # 0 = none, ~0.3 = visible corner falloff
     gamma: float = 1.0                  # intensity gamma; 1.0 = no change
+    speckle_sigma: float = 0.0          # multiplicative speckle stddev; 0 = none
+    sp_fraction: float = 0.0            # salt-and-pepper impulse fraction; 0 = none
     # charging
     charging: float = 0.0          # 0 = none; grey-level scale of the field
     charging_scale_nm: float = 400.0
@@ -264,6 +266,41 @@ def apply_gamma(img: np.ndarray, p: CaptureParams) -> np.ndarray:
     return np.power(x, p.gamma) * 255.0
 
 
+def apply_speckle(img: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
+    """Multiplicative speckle: I_out = I_in * (1 + n), n ~ N(0, sigma^2).
+
+    A signal-dependent granularity term (it scales with local intensity, unlike
+    the additive read noise), standard in the SEM/detector noise taxonomy --
+    Goldstein et al., Scanning Electron Microscopy and X-Ray Microanalysis, the
+    same general reference the rest of the noise ledger cites. This is a textbook
+    model, NOT a measured SEM-specific parameter. Applied to the wide capture
+    before photon counting. Gated: speckle_sigma <= 0 is a no-op AND draws
+    nothing from `rng`, so Phase 1 output stays byte-identical.
+    """
+    if p.speckle_sigma <= 0:
+        return img
+    n = rng.standard_normal(img.shape).astype(np.float32) * p.speckle_sigma
+    return img * (1.0 + n)
+
+
+def apply_salt_pepper(img: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
+    """Salt-and-pepper impulse noise: a small fraction of pixels are forced to 0
+    (dead) or 255 (saturated), modelling stuck detector pixels. A standard
+    impulse-noise model (same textbook taxonomy), not a measured parameter.
+    Applied last, after the additive noise, since a stuck pixel overrides the
+    signal. Gated: sp_fraction <= 0 is a no-op AND draws nothing from `rng`, so
+    Phase 1 output stays byte-identical.
+    """
+    if p.sp_fraction <= 0:
+        return img
+    out = img.copy()
+    r = rng.random(img.shape)
+    half = p.sp_fraction / 2.0
+    out[r < half] = 0.0
+    out[r > 1.0 - half] = 255.0
+    return out
+
+
 def barrel_displacement_at(x, y, shape, k1: float):
     """Forward barrel/pincushion displacement (dx, dy) at image point (x, y).
 
@@ -424,8 +461,10 @@ def render(material: np.ndarray, p: CaptureParams, rng) -> np.ndarray:
     x = apply_scan_artefacts(x, p, rng)
     x = apply_vignette(x, p)
     x = apply_gamma(x, p)
+    x = apply_speckle(x, p, rng)       # multiplicative, scales with the signal
     x = add_shot_noise(x, p, rng)
     x = add_read_noise(x, p, rng)
+    x = apply_salt_pepper(x, p, rng)   # impulse; a stuck pixel overrides all else
     return quantize(x)
 
 
