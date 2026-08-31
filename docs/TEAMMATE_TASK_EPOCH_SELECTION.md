@@ -159,11 +159,8 @@ the existing entries, with:
 
 ## Commit / push rules (strict — keep the history clean and consistent)
 
-- Set the git identity to the team lead before committing so the submission history stays
-  single-author: `git config user.name "Aryan Chourasia"` and
-  `git config user.email "achourasia_be24@thapar.edu"`. (Heads-up: your previous commit `7d9089e`
-  went in under a different identity — Aryan may ask you to keep everything under his going forward;
-  use his identity for this task.)
+- Commit under your own git identity, same as your previous commit `7d9089e` — no change needed
+  there.
 - **No co-author or trailer lines of any kind.** Everything committed — commit message, code
   comments, docs — must read as your own hand-written work. Scan your diff and strip any
   auto-generated attribution or trailer lines before pushing.
