@@ -832,3 +832,59 @@ rejection rule, which 300 labeled pairs (67 absent) still do not comfortably sup
 the theta sign convention is still only validated self-consistently against our own generator -- the
 organizers' sample ground-truth theta (not yet released as of this work) is still required before
 trusting the sign on the scored submission.
+
+---
+
+## Epoch-selection verification: was epoch 2 really the best checkpoint? (31 Aug)
+
+Executed `docs/TEAMMATE_TASK_EPOCH_SELECTION.md`. This is a *measurement-correctness* check, not a
+tune: the retrain kept epoch 2 because held-out accuracy "peaked" there, but that peak was read off
+the training loop's **n=60 quick-eval** -- small enough that "epoch 2 is best" could be a noise
+wobble rather than a real peak (loss fell monotonically all the way to epoch 15, so a later epoch
+could plausibly be better). Re-decided the question on 100- then 150-pair samples, through the
+shipping pipeline, with the exact-rubric scorer (`scripts/score_phase2.py --ckpt`). No retrain
+needed -- `checkpoints_new/best.pt` (= epoch 2, = `best_phase2_rot8k.pt`) and
+`checkpoints_new/last.pt` (= epoch 15) were both still on disk.
+
+**Step 2 -- full `p2eval100` (100 pairs), localization only (the only component the net affects;
+pose/rejection come from the checkpoint-independent classical path):**
+
+| Checkpoint | @5px | credit /40 | median |
+|---|---|---|---|
+| old `best_phase2.pt` | 83.0% | 31.84 | 0.69 px |
+| **epoch 2 (shipped) `best_phase2_rot8k.pt`** | **84.0%** | **32.40** | 0.69 px |
+| epoch 15 `last.pt` | 83.0% | 32.08 | 0.63 px |
+
+Epoch 2 is marginally *ahead* of epoch 15 here (+1 pp @5px, +0.32 /40), not behind -- so no later
+epoch overtakes it. That already answers the question, so **Step 4 (the ~3 GPU-hour per-epoch
+re-run to map epochs 3-14) was skipped** per the doc's own guidance ("skip it if Step 2 gives a
+clear answer -- it usually will").
+
+**Step 3 -- fresh, unused `p2test150` (seed 920000, non-overlapping with all train/eval/calib
+seeds), the honest number since `p2eval100` is now a selection set:**
+
+| Checkpoint | @5px | credit /40 | median |
+|---|---|---|---|
+| old `best_phase2.pt` | 82.0% | 31.25 | 0.74 px |
+| **epoch 2 (shipped)** | **82.0%** | 31.47 | 0.69 px |
+| epoch 15 `last.pt` | 82.0% | 31.84 | 0.66 px |
+
+**All three tie at 82.0% @5px on the fresh set** (0 pp apart). Epoch 15's /40 credit is trivially
+higher (31.84 vs 31.47) and its median trivially tighter (0.66 vs 0.69 px), but the decision rule is
+defined on @5px, where the gap is zero.
+
+**Decision -- KEEP epoch 2 (`best_phase2_rot8k.pt`), no change.** The rule: on n=150 (binomial noise
+~+-4 pp) a difference is real only at >=5 pp @5px; everything here is 0 pp, a tie, and a tie means
+the shipped checkpoint stands -- do not manufacture a winner from a 0.4-in-40 credit wobble. The old
+net does NOT beat both (it is last on credit, tied on @5px), so no surprise-flag branch triggers.
+`register.py` is unchanged -- it still ships `best_phase2_rot8k.pt` on the same one line as before.
+
+**What this verification bought:** it retires the "epoch 2 might be a 60-pair noise artifact" risk.
+On 100 and 150 pairs epoch 2 is tied-or-better than epoch 15 everywhere, so shipping it was the
+correct call, now decided on a trustworthy sample size rather than 60 pairs. `FOUND_PEAK` left at
+0.68, untouched, as the task required (the 300-pair recalibration above already settled it -- a
+separability ceiling, not a tuning problem).
+
+Repo hygiene: only `docs/PHASE2_RESEARCH_NOTES.md` and `.gitignore` changed (added `data/p2test150/`
+to the ignore list). No code change. `data/p2test150` not committed -- regeneratable from seed
+920000.

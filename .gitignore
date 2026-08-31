@@ -72,3 +72,4 @@ data/_seedscan/
 data/p2train8k/
 data/p2calib300/
 data/p2eval100/
+data/p2test150/
