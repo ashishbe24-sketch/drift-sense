@@ -888,3 +888,84 @@ separability ceiling, not a tuning problem).
 Repo hygiene: only `docs/PHASE2_RESEARCH_NOTES.md` and `.gitignore` changed (added `data/p2test150/`
 to the ignore list). No code change. `data/p2test150` not committed -- regeneratable from seed
 920000.
+
+---
+
+## Fourier-Mellin invariant scale+rotation estimator: built, measured, and rejected (31 Aug)
+
+Executed `docs/TEAMMATE_TASK_FOURIER_MELLIN.md` -- the "invariant formulation" Gokul named on the
+orientation call as the other acceptable way to handle unknown scale+rotation, as an independent
+cross-check against the existing grid search. **Verdict: it loses decisively, with a diagnosed,
+verified root cause -- not a bug, not a sign-convention miss, a real information-availability limit
+of this specific problem's geometry.** Built as isolated new files only (`fmt_pose.py`,
+`scripts/eval_fmt.py`), per the task's scope rule -- `solve.py`/`route.py` untouched.
+
+**The idea, and why it looked promising going in:** textbook FMT registers two images that are
+literally the same content differing by rotation/scale/translation, via log-polar phase correlation
+of their FFT-magnitude spectra. Our reference and wide don't share a field of view, so this doesn't
+directly apply -- but the die layouts are periodic (DRAM/FinFET arrays), and a periodic lattice's
+spatial frequency is a shared, translation-invariant signature present in *both* images: a physical
+pitch of P nm appears at P px in the 1 nm/px reference and P/scale px in the wide view, and the whole
+layout (lattice included) shares the same relative rotation as the landmark. In principle, the
+lattice's frequency peak should shift radially by log(scale) and angularly by theta between the two
+spectra -- recoverable by log-polar phase correlation, driven by the periodic background instead of
+a shared foreground.
+
+**Built:** Hann-windowed 2D FFT magnitude, tight Gaussian high-pass (deliberately narrow -- a wide
+one was tried first and turned out to suppress exactly the low-radius band where a large-pitch
+reference's lattice peak lives), log-polar remap (720x720, log-spaced radius), per-ring
+whitening (subtract/divide by each radius's across-angle mean/std, to remove the shared broadband
+1/f-ish envelope any textured image has, which otherwise dominates a naive correlation), then FFT
+phase correlation with a parabolic sub-bin refine -- the same technique `solve.py`'s `_subpixel`
+already uses, applied to the log-polar bin index instead of the image plane.
+
+**Diagnosed empirically before trusting any accuracy number (direct spectral inspection, not just
+an aggregate score):** on a sample pair, the WIDE image showed a strong, sharp, individually
+identifiable frequency spot at radius 41 -- matching the physics prediction (`n/pitch_nm * scale` =
+41.0) almost exactly. But the REFERENCE image showed **no corresponding standout peak** at its
+predicted radius (~4.3) -- the values there (13.6-14.1) were statistically indistinguishable from
+the surrounding broadband floor (also 13.6-14.1). Root cause: the reference's 1 um field of view at
+a 70-320 nm pitch (the dominant "resolved" regime, 60% of pairs by generator design) shows only
+**3-14 lattice periods** -- too few for a sharp spectral peak (a periodic signal needs many cycles
+to produce a narrow, tall frequency-domain spike; the wide view's much larger ~8-12 um FOV gives it
+25-170+ periods of the same pitch, hence its clean peak). Unlike textbook FMT, where both images are
+rich in the shared periodic content, one side of this correspondence is information-starved by the
+problem's own geometry -- the reference is *supposed* to be a small, tight crop.
+
+**Quantitative confirmation, not just one example (60-pair set, seed 810600):** correlation between
+the FMT estimator's raw signal and ground truth scale/theta, by regime:
+
+| regime | n | scale corr | theta corr | mean confidence |
+|---|---|---|---|---|
+| resolved | 39 | -0.186 | -0.276 | 0.0137 |
+| aliased | 7 | +0.216 | -0.317 | 0.0133 |
+| coarse | 14 | +0.202 | -0.053 | 0.0131 |
+
+All \|r\| < 0.32, inconsistent sign across regimes, confidence uniformly tiny (~0.013, versus
+`solve.py`'s peak-NCC routinely 0.7-0.99 on real matches) -- this is noise, not a flipped sign to
+fix. Confirmed head-to-head on the full spec'd 200-pair set (seed 810000, `scripts/eval_fmt.py`),
+restricted to the 140/200 pairs the classical grid search already localizes <=5px (so both methods
+are judged on the same solvable pairs):
+
+| Method | scale median err | scale tiers (<=1/2/5%) | theta median err | theta tiers (<=0.25/0.5/1.0 deg) | runtime/pair |
+|---|---|---|---|---|---|
+| **grid search (shipped)** | **1.127%** | 44% / 69% / 93% | **0.208 deg** | 58% / 76% / 86% | 1932 ms |
+| **FMT** | 90.237% | 0% / 0% / 0% | 44.412 deg | 1% / 1% / 1% | 453 ms |
+
+FMT is ~4x faster (453 ms vs 1932 ms/pair, both well inside the 5 s budget either way) but the
+accuracy gap is total, not marginal -- 0% of pairs land in any scale or rotation tier. This is a
+clean loss, not a close call needing more tuning.
+
+**Decision: do NOT integrate FMT.** The task's own framing anticipated this as a legitimate outcome
+("a tie or a loss is a perfectly good outcome to report") -- reporting it. The root cause (reference
+field-of-view too small for the primary pitch regime to produce a usable spectral peak) is a property
+of the problem's geometry, not an implementation defect fixable by more tuning of this approach; a
+genuinely different design (e.g. estimating the wide image's own periodicity independently, without
+needing a matching reference-side peak, then cross-checking candidate scales some other way) would
+be a materially different, larger undertaking than "one shot invariant formulation" and was not
+pursued further given the remaining time before submission and the higher-priority open items
+(rejection/calibration ceiling, CPU-latency benchmark, organizers' sample data still unconfirmed).
+
+**Not committed:** `data/fmt_calib20/`, `data/fmt_calib60/`, `data/fmt_test200/` -- regeneratable
+from seeds 810500 / 810600 / 810000, added to `.gitignore`. Committed: `fmt_pose.py`,
+`scripts/eval_fmt.py`, this entry -- `solve.py`/`route.py` untouched, per the task's isolation rule.

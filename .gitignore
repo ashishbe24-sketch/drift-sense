@@ -73,3 +73,9 @@ data/p2train8k/
 data/p2calib300/
 data/p2eval100/
 data/p2test150/
+
+# Fourier-Mellin task (docs/TEAMMATE_TASK_FOURIER_MELLIN.md): regeneratable
+# from their recorded seeds (810500 / 810600 / 810000).
+data/fmt_calib20/
+data/fmt_calib60/
+data/fmt_test200/
