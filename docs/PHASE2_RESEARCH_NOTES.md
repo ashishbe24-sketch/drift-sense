@@ -1321,3 +1321,52 @@ uses this SCAN set, so Phase 1 is untouched by construction.
 
 No retrain, no new data, no change to theta/scale-recovery or rejection logic / FOUND_PEAK; p011/p012
 rejection left alone. Only `solve.py` (the SCAN_ANGLES constant) changed.
+
+---
+
+## Set C decoy fidelity: absent pairs made realistic; a deeper finding about the threshold (1 Sep)
+
+Goal: our absent pairs scored up to ~0.93 vs the organizers' ~0.40 (their real absent pairs p015-p018
+score 0.37-0.40 under OUR matcher), so a threshold recalibrated on our own data was untrustworthy.
+
+**Diagnosis (measured, our generator):** the driver is the periodic PITCH, not the landmark.
+- Clearing the decoy's landmark shapes changed the absent peak distribution by nothing (median 0.39,
+  max 0.93 either way) -- so landmark reproduction is NOT the cause.
+- High absent peaks came from decoys whose redrawn pitch landed NEAR the reference's (|ratio-1| ~0.05-
+  0.14 -> peak 0.74-0.93). Our gratings are very regular, so a near-equal-pitch decoy correlates ~0.9.
+- Forcing a large pitch offset dropped the max: same-band uniform 0.93 -> +30-50% offset 0.86 ->
+  +50-100% offset 0.64.
+
+**Fix (generator only, `generate_dataset.py` absent branch):** the decoy pitch is now drawn a factor
+0.5-1.0 AWAY from the reference pitch (same family, clamped to the pitch envelope) instead of a fresh
+same-band sample. That is a genuinely different feature scale within the family -- exactly the
+organizers' dram_dense-vs-dram_wide preset variety -- so the two lattices don't co-register.
+Regenerated p2calib300 (seed 950000): **absent peak median 0.507 -> 0.371** (now matching the
+organizers' ~0.40), present distribution essentially unchanged (median ~0.90). Phase 1 untouched
+(the change is inside the absent branch; seed 7000 still scale=10.0). A high tail remains (a few
+decoys still align, absent max ~0.99) -- see the deeper finding.
+
+**The deeper finding -- fixing the absent side alone pushes the threshold the WRONG way.** Recalibrated
+FOUND_PEAK on the new realistic-absent 600-pair set (p2calib300 + p2reject_test300): cost-optimal at
+the honest w>=3 weight is now **0.60** (F1 0.945), UP from the 0.53 we ship. But 0.60 is wrong for
+reality: on the organizer sample present pairs run down to 0.407, and 0.53 correctly recovers p014
+(0.557) while **0.60 would false-reject it**. The reason the recalibration drifts high is the OTHER
+half of the fidelity gap: **our PRESENT degradation is too mild.** Our present median is 0.908, but
+the organizers' Set B severity-3/4 pairs dip to ~0.41 (their README even says the real 200-set shifts
+Set B toward severity 3-4). Our generator doesn't produce those low-scoring degraded present pairs, so
+the recalibration doesn't "see" them and picks too high a cut. **Firming up the threshold needs BOTH
+sides realistic; the absent fix alone is not sufficient and would mislead the calibration.**
+
+**Decisions:**
+- **Keep the decoy fix** -- it is a genuine Set C fidelity improvement (absent pairs now score like the
+  organizers', which is honest generator quality for the 10-pt bucket) and sets up correct future
+  calibration.
+- **Keep `FOUND_PEAK = 0.53`, do NOT move to 0.60.** 0.53 is validated on the organizers' own sample
+  (the best proxy for reality: rejection F1 0.963, recovers p014); the 0.60 our data suggests is an
+  artifact of the still-too-mild present degradation. Recalibrating our threshold on our own data will
+  only be trustworthy once Set B severity is also made realistic.
+- **Next fidelity item (flagged, not done): harsher Set B degraded-present pairs** (severity 3-4 that
+  push present peaks down to ~0.41), so a future own-data recalibration matches reality on both sides.
+
+Files: `generate_dataset.py` (decoy pitch offset) + this note. `route.py`/FOUND_PEAK unchanged.
+Datasets regenerated locally, gitignored. Organizer data untouched and uncommitted.

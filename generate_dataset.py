@@ -118,10 +118,25 @@ def generate_one(seed: int, style: str | None, out_dir: pathlib.Path,
                                      signed_rotation=signed_rotation, absent=False,
                                      scan_distortion_max=scan_distortion_max,
                                      optical_aberrations=optical_aberrations)
-            band = REGIMES[spec.regime]["pitch_nm"]
-            decoy_spec.regime = spec.regime
-            decoy_spec.pitch_nm = float(
-                np.random.default_rng(seed ^ 0xDEC0BA5E).uniform(*band))
+            # Draw the decoy pitch a substantial FACTOR away from the reference's
+            # (same family), not just a fresh sample in the same regime band. Our
+            # gratings are very regular, so a decoy whose pitch lands near the
+            # reference's correlates ~0.9 -- unrealistically high next to the
+            # organizers' real absent pairs, which top out ~0.40 under this same
+            # matcher (empirically the periodic PITCH, not the landmark, drives
+            # the peak: clearing the decoy's landmark changed nothing). A forced
+            # >=50% offset makes the two lattices genuinely different -- a
+            # different feature scale within the family, exactly the organizers'
+            # dram_dense-vs-dram_wide preset variety -- and brings absent peaks
+            # into the realistic range (max ~0.93 -> ~0.64). Deterministic from
+            # the pair seed; clamped to the overall pitch envelope.
+            dr = np.random.default_rng(seed ^ 0xDEC0BA5E)
+            f = float(dr.uniform(0.5, 1.0))
+            refp = spec.pitch_nm
+            dp = refp * (1.0 + f) if dr.random() < 0.5 else refp / (1.0 + f)
+            pmin = min(b["pitch_nm"][0] for b in REGIMES.values())
+            pmax = max(b["pitch_nm"][1] for b in REGIMES.values())
+            decoy_spec.pitch_nm = float(np.clip(dp, pmin, pmax))
             wide_layout = build_layout(decoy_spec, target_nm=TARGET_NM,
                                        extent_nm=EXTENT_NM)
         mat_ref, mat_wide, gt = make_pair(layout, TARGET_NM, offset,
