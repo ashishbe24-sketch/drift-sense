@@ -1240,3 +1240,35 @@ predictions.csv` on the real 20-pair sample.
 
 No retrain, no theta/scale/rejection-logic change, no new training data. Committed: regenerated
 `requirements.txt` + this note. Organizer data stays gitignored and uncommitted.
+
+---
+
+## Fresh-env verification: "no torch/GPU/network needed" is actually TRUE, not assumed (1 Sep)
+
+The previous note asserted the shipped path runs without torch. That was reasoned from the import
+graph but never executed clean-room, so it was verified properly:
+
+- **Static audit:** every `torch` / `driftmatch` import in the register.py -> route -> solve chain is
+  inside a function, never module-level. `register.py` and `solve.py` import no torch at all. The only
+  one register.py's classical path can reach is `route.load_net`, whose `import torch` is inside a
+  `try/except` returning `(None, "cpu")` on failure; the `use_net_xy` net branch (default off) is the
+  only other, and it is doubly guarded.
+- **Clean-room run:** created a GENUINELY FRESH venv (separate from the dev `.venv`) and
+  `pip install -r requirements.txt` -- which now installs ONLY `numpy 2.5.1 / pillow 12.3.0 /
+  scipy 1.18.0` (torch was moved to a commented, optional line so the default install is torch-free).
+  Confirmed `torch present: False` in that env, then ran
+  `register.py --input pairs.csv --output predictions.csv` on the organizers' 20-pair sample.
+- **Result: clean.** Exit code 0, no import errors, no crash. It printed
+  `[route] net unavailable (ModuleNotFoundError: No module named 'torch'); using classical only` --
+  i.e. the graceful-degradation path fired exactly as intended -- and produced a valid 6-column
+  `predictions.csv` (20 rows, every pair_id once, no missing/dupes, `found` in {0,1}). The torch-free
+  output is **byte-identical** to the torch-present dev-env run, confirming the shipped classical path
+  is genuinely torch-independent and deterministic.
+- **Bug found / fixed:** none. No unguarded import escaped `load_net`'s try/except. The only change
+  was to `requirements.txt` -- torch is now an explicit OPTIONAL (commented, with a separate
+  `pip install "torch>=2.4"` note) rather than an active install line, so the claim is now literally
+  true for a default `pip install -r requirements.txt` and stays CI-checkable.
+
+Bottom line: the CPU-only, no-GPU, no-network reference machine can run the full submission with three
+pure-Python-wheel packages. (Runtime on real 4-core hardware is still the separate CPU-latency task;
+this note is about dependency/portability, not speed.)

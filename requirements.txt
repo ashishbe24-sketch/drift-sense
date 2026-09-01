@@ -14,11 +14,13 @@ pillow==12.3.0
 scipy==1.18.0
 
 # OPTIONAL -- the learned matcher (DriftMatchNet / DriftRoute's net branch).
-# Not needed to run register.py: route.load_net() catches a missing torch and
-# returns (None, "cpu"), and predict_full keeps use_net_xy=False by default, so
-# the net is never required at inference. Install a CPU build to experiment with
-# the net path (predict_full(..., use_net_xy=True)); the checkpoints ship in the
-# repo. A CUDA build is only useful for (re)training, never for the CPU-only
-# reference machine. Left as a floor, not a pin, so pip resolves a CPU wheel and
-# the local +cuXXX build is never imposed on the grader.
-torch>=2.4
+# Deliberately NOT an install line, so `pip install -r requirements.txt` yields a
+# torch-free environment and the "no torch needed to run" claim is literally true
+# (verified 1 Sep in a fresh venv installing only the three packages above; see
+# docs/PHASE2_RESEARCH_NOTES.md). register.py degrades gracefully without torch:
+# route.load_net() catches the missing import and returns (None, "cpu"), and
+# predict_full keeps use_net_xy=False by default, so the net is never required at
+# inference. To experiment with the net path (predict_full(..., use_net_xy=True)),
+# install a CPU build separately -- the checkpoints ship in the repo:
+#     pip install "torch>=2.4"
+# A CUDA build is only useful for (re)training, never for the CPU-only grader.
