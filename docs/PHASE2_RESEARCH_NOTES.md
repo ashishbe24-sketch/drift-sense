@@ -1272,3 +1272,52 @@ graph but never executed clean-room, so it was verified properly:
 Bottom line: the CPU-only, no-GPU, no-network reference machine can run the full submission with three
 pure-Python-wheel packages. (Runtime on real 4-core hardware is still the separate CPU-latency task;
 this note is about dependency/portability, not speed.)
+
+---
+
+## p008 diagnosed and fixed: the scale scan ignored rotation (1 Sep)
+
+A single-failure diagnosis, done before touching anything. On the organizers' sample the naive-ZNCC
+baseline solves **p008** cleanly (0.28 px, credit 1.00) -- it is Set A, severity 0, the easiest tier
+-- yet our classical matcher missed it by 246 px despite having MORE machinery (scale search, blur x
+angle grid, centre-tiebreak, sub-pixel). So something in the extra machinery was actively hurting,
+not inherent difficulty.
+
+**Mechanism (measured, `solve.locate` on p008's real ref/search, GT (217.1, 806.7) scale 11.9
+theta 1.4):**
+- Landed at (210.6, 560.7), 246 px off. **NOT the centre-tiebreak** -- plain argmax and the
+  centre-rule pick were the identical wrong point, so `lam` is exonerated here.
+- It picked **scale 11.44** (scan winner 11.5, refined down); GT is 11.9. At that wrong scale a
+  periodic decoy scored NCC 0.655 while the true site scored only 0.599 -> decoy wins.
+- **Forcing the true scale 11.9 -> argmax lands at (217.0, 807.0), 0.3 px, NCC 0.768** -- the true
+  site wins cleanly. So the *only* thing wrong was the recovered scale.
+- Root cause: the scale scan/refine ranked zoom with `SCAN_BLURS=(0,)`, `SCAN_ANGLES=(0,)`. Evaluated
+  at angle 0 while the pair is rotated 1.4 deg (and 11.9 falls between the 11.5/12.0 grid steps), the
+  objective peaked at the decoy-aliasing scale 11.44 instead of 11.9.
+
+**p012 checked for the same signature (both are finfet_22nm): it is NOT the same.** p012 localises
+correctly (0.7 px); its only problem is a low peak (0.407, severity 4) -- the separately-confirmed
+inherent rejection case. So the architecture is a red herring; p008 is a scale-scan bug, p012 is a
+rejection edge case (left untouched per scope).
+
+**Fix (cheap, safe, verified): `SCAN_ANGLES = PHASE2_ANGLES`** (scan the same +-5 deg range the
+pipeline already searches); `SCAN_BLURS` kept at `(0,)` -- adding blur to the scan *re-broke* p008
+(a blurred stamp matches a smooth decoy at the wrong scale better than the true site). Empirically,
+`+angle` alone fixed it; `+blur` did not; `+both` re-broke it. Only the scales-given Phase 2 path
+uses this SCAN set, so Phase 1 is untouched by construction.
+
+**Verification (before -> after):**
+- Organizer 20-pair: localisation **29.7 -> 35.6/40** (Set A mean-credit 0.875 -> **1.000**, all 8
+  perfect; p008 246 px -> **0.54 px**), rejection F1(present+) 0.923 -> **0.963**, calibration AUC
+  0.725 -> 0.789. (pose scale credit dips 8.9 -> 8.0 only because two more pairs now localise and get
+  their scale scored -- more pose entries, not worse pose.)
+- Our own `p2eval100` (held-out, Phase 2): **73.0% -> 76.0% @5px**, median unchanged -- so the fix
+  helps our own distribution too, it is not fitted to p008.
+- Regression: curated30 (Phase 1) **90.0% -> 90.0%**, median 0.166 px identical, C00 still
+  **559.904, 470.001** -- zero Phase 1 change, as expected.
+- Cost: ~+40% per Phase 2 pair (1.04 -> 1.48 s/pair on our 12-core box; the 5-angle scan is 5 cheap
+  half-res correlations per scale instead of 1). Still inside the 5 s budget here; the dedicated
+  4-core CPU-latency benchmark still needs to confirm.
+
+No retrain, no new data, no change to theta/scale-recovery or rejection logic / FOUND_PEAK; p011/p012
+rejection left alone. Only `solve.py` (the SCAN_ANGLES constant) changed.
