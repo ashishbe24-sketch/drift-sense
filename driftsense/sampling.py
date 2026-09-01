@@ -316,6 +316,32 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
     ratio = float(rng.uniform(ratio_lo, ratio_hi))
     size = float(np.clip(ratio * res_nm, *LANDMARK_ABS_NM))
 
+    # Set B severity ladder (Phase 2; the addendum discloses 4 severity levels).
+    # The base draws above give a moderate wide capture, and the landmark was
+    # just sized against it. Real Set B spans 4 levels whose hardest (sev 3-4)
+    # push a PRESENT pair's match confidence down toward the absent range (the
+    # organizers' p011/p012 score ~0.41). Sample a level and, from sev 2 up,
+    # drive the DISCLOSED degradation categories (defocus, dose/shot noise,
+    # charging, vibration, scan distortion, detector noise) toward their harsh
+    # end scaled by severity -- applied AFTER landmark sizing, so the degradation
+    # genuinely hurts rather than being compensated by a larger landmark. Gated
+    # on the phase2 degradation being enabled (optical_aberrations), so Phase 1
+    # takes no draw here and stays byte-identical. The per-level params are
+    # engineering choices calibrated on our own data, NOT the organizers'
+    # undisclosed ladder. The mutated values flow into the manifest (wide_blur,
+    # wide_dose, wide_charging, ...), so each pair's severity is auditable.
+    if optical_aberrations:
+        sev = int(rng.choice(5, p=[0.30, 0.25, 0.20, 0.15, 0.10]))   # 0..4
+        if sev >= 2:
+            s = (sev - 1) / 3.0                                      # 0.33..1.0
+            wide.defocus_sigma_nm = max(wide.defocus_sigma_nm, float(rng.uniform(12.0, 28.0)) * s)
+            wide.dose_e_per_grey = wide.dose_e_per_grey / (1.0 + 2.2 * s)
+            wide.charging = max(wide.charging, float(rng.uniform(2.0, 6.0)) * s)
+            wide.vibration_nm = max(wide.vibration_nm, float(rng.uniform(4.0, 12.0)) * s)
+            wide.speckle_sigma = max(wide.speckle_sigma, float(rng.uniform(0.08, 0.20)) * s)
+            wide.read_sigma = max(wide.read_sigma, float(rng.uniform(2.0, 5.0)) * s)
+            wide.scan_distortion_px = max(wide.scan_distortion_px, float(rng.uniform(3.0, 9.0)) * s)
+
     # Absent (Set C): the reference has no true instance in the wide view. The
     # placement draws above are kept (so the rng stream is unchanged) but the
     # ground truth is marked absent and the coordinates are set to a -1 sentinel;

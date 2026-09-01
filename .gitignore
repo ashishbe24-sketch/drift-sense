@@ -97,3 +97,5 @@ data/organizer_sample/
 # randomised poses -- NOT their 20 sample pairs). Large, regeneratable.
 data/amp_train/
 driftmatch/checkpoints_amp/
+AMP_Phase 2 material/
+Dataset_AMP_Phase 2/

@@ -69,13 +69,27 @@ LAMBDA = 0.08
 BLURS = (0.0, 1.0, 2.0, 3.0)
 ANGLES = (-4.0, -2.0, 0.0, 2.0, 4.0)
 
-# During the scale search, scale is ranked with a single cheap variant rather
-# than the full blur x angle grid: mismatched blur/angle penalise every scale
-# candidate about equally, so the correct scale still wins the ranking, and the
-# real blur/angle are recovered once at the chosen scale. This keeps the scale
-# search inside the CPU runtime budget (measured ~5x faster, same accuracy).
+# During the scale search, scale is ranked with a cheap variant set rather than
+# the full blur x angle grid, then the real blur/angle are recovered once at the
+# chosen scale.
+#
+# Blur stays a single value: mismatched blur penalises every scale about equally,
+# and adding blur to the scan actively HURTS -- a blurred stamp matches a smooth
+# periodic decoy at the WRONG scale better than the true site (verified: it
+# re-broke p008).
+#
+# Angle, however, must span the searched rotation range, NOT just 0. The original
+# angle-0-only scan mis-ranked the scale on rotated pairs: for organizer p008
+# (true scale 11.9, theta 1.4, which also falls between the 11.5/12.0 grid steps)
+# the angle-0 objective peaked at a decoy-aliasing scale 11.44, where a periodic
+# decoy (NCC 0.655) outscored the true site (0.599) by 246 px. Scanning scale
+# over the same +-5 deg range the pipeline already searches lets the true scale
+# win: p008 246 px -> 0.5 px, and our own p2eval100 rose 73% -> 76% @5px with no
+# Phase 1 change (this SCAN set is only used on the scales-given Phase 2 path;
+# curated30 stays byte-identical, C00 still 559.904, 470.001). Cost ~+40% per
+# Phase 2 pair (still inside the 5 s budget on our box; see the CPU-latency task).
 SCAN_BLURS = (0.0,)
-SCAN_ANGLES = (0.0,)
+SCAN_ANGLES = PHASE2_ANGLES
 
 
 def downsample(img: np.ndarray, factor: int = SCALE) -> np.ndarray:
