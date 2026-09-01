@@ -1370,3 +1370,34 @@ sides realistic; the absent fix alone is not sufficient and would mislead the ca
 
 Files: `generate_dataset.py` (decoy pitch offset) + this note. `route.py`/FOUND_PEAK unchanged.
 Datasets regenerated locally, gitignored. Organizer data untouched and uncommitted.
+
+---
+
+## CPU-latency benchmark: comfortably inside budget, and core-count-insensitive (1 Sep)
+
+The grader is 4-core x86 / 8 GB / no GPU / no network; every prior timing was on our 12-core box with
+a GPU, so runtime against the 5 s median / 20 s hard-cap budget had never been checked under the real
+constraint. Simulated it: ran in the torch-free fresh venv (numpy/scipy/pillow only, matching the
+submission env) with BLAS/FFT threads capped (`OMP/OPENBLAS/MKL/NUMEXPR_NUM_THREADS`), on the
+organizers' 20 real pairs, timing `route.predict_full` per pair (the shipped classical path,
+`use_net_xy=False`).
+
+| threads | median/pair | max/pair | 5 s median | 20 s hard cap |
+|---|---|---|---|---|
+| 1 (single-core floor) | 1.45 s | 1.67 s | **PASS** (3.4x headroom) | **PASS** (12x) |
+| 4 (grader simulation) | 1.51 s | 1.71 s | **PASS** (3.3x) | **PASS** (11x) |
+
+**Key finding: 1-thread ~= 4-thread ~= 12-thread (~1.5 s).** The classical path (scipy FFT
+correlation + the coarse-to-fine scale/angle search) is effectively single-threaded, so the grader's
+4-core cap costs us essentially nothing -- only its per-core clock speed matters. Full `register.py`
+end-to-end (4-thread, torch-free) was **30.0 s for 20 pairs** (~1.5 s/pair incl. a small startup; no
+torch to import). Memory is a non-issue (1000x1000 float images + correlation maps, a few hundred MB;
+well under 8 GB).
+
+**Verdict: very low timeout risk.** median ~1.5 s vs the 5 s budget (3.3x headroom), max ~1.7 s vs the
+20 s hard cap (11x). This includes the p008 fix (SCAN_ANGLES = PHASE2_ANGLES, the ~+40% scale-scan
+cost). **Caveat:** our per-core speed vs the grader's is unknown -- the grader's cores would have to be
+>3.3x slower per-core than ours to breach the 5 s median, and >11x slower to hit a 20 s zero, both
+unlikely for any modern 4-core box. The real 200-pair set is "harder" (more degradation) but that does
+not change the correlation-grid compute, so per-pair time should be similar. No code change from this
+task -- measurement only.
