@@ -92,3 +92,5 @@ driftmatch/checkpoints_speckle/
 # Real organizer validation data (shared privately by the mentor) -- must
 # never be committed to this public repo. Local-only, used for diagnosis.
 data/organizer_sample/
+AMP_Phase 2 material/
+Dataset_AMP_Phase 2/
