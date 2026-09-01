@@ -92,3 +92,8 @@ driftmatch/checkpoints_speckle/
 # Real organizer validation data (shared privately by the mentor) -- must
 # never be committed to this public repo. Local-only, used for diagnosis.
 data/organizer_sample/
+
+# Training data generated from the organizers' own Phase 2 generator (new seeds,
+# randomised poses -- NOT their 20 sample pairs). Large, regeneratable.
+data/amp_train/
+driftmatch/checkpoints_amp/
