@@ -1,13 +1,24 @@
-# Core -- Solution 1 (DriftFind, classical) and the dataset generator.
-# CPU-only, no GPU needed. These three alone run the classical inference and
-# regenerate every dataset byte-identically.
+# DriftSense Phase 2 -- runtime dependencies for register.py.
+# Versions are the exact ones from the environment register.py was validated in
+# (pip freeze, 1 Sep 2026); the three core packages below are all that the
+# SHIPPED path needs.
+#
+# register.py -> route.predict_full -> solve.locate is the classical scale/rotation
+# search, and it imports ONLY these three. This is the path that produces every
+# one of the six output columns now (x, y, theta, scale, found, score): the run
+# on the organizers' sample uses classical x,y (route.predict_full's use_net_xy
+# defaults to False), so a CPU box with just numpy/scipy/pillow runs the full
+# submission -- no torch, no GPU, no network required.
 numpy==2.5.1
 pillow==12.3.0
 scipy==1.18.0
 
-# Solutions 2 & 3 (DriftMatchNet / DriftRoute -- the learned matcher).
-# A CUDA build is recommended for speed; a CPU build also works (slower).
-# The classical path needs no torch, and the router (predict_router.py) falls
-# back to the classical path automatically when torch or a GPU is unavailable,
-# so the inference script always runs.
+# OPTIONAL -- the learned matcher (DriftMatchNet / DriftRoute's net branch).
+# Not needed to run register.py: route.load_net() catches a missing torch and
+# returns (None, "cpu"), and predict_full keeps use_net_xy=False by default, so
+# the net is never required at inference. Install a CPU build to experiment with
+# the net path (predict_full(..., use_net_xy=True)); the checkpoints ship in the
+# repo. A CUDA build is only useful for (re)training, never for the CPU-only
+# reference machine. Left as a floor, not a pin, so pip resolves a CPU wheel and
+# the local +cuXXX build is never imposed on the grader.
 torch>=2.4
