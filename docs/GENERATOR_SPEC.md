@@ -363,3 +363,28 @@ the same forward map applied to the pixels — implemented and the sign conventi
     of the same architecture... plausible and periodically similar") is itself a hard-negative
     specification, which this generator implements directly rather than approximating with an easier
     negative.
+
+### 8.1 Detector noise categories (speckle, salt-and-pepper) — 1 Sep 2026
+
+Two further degradation categories were added for Phase 2 after confirming (grep of
+`driftsense/physics.py`) that the generator modelled neither, while Applied Materials' own Phase 2
+generator spec lists `add_speckle_noise` / `add_salt_and_pepper_noise` as reusable functions in its
+reference pipeline, and two independent competitor generators both name multiplicative speckle as a
+degradation factor. Same honest framing as entries 25–30: these are *standard, textbook noise
+models*, not SEM-specific measured parameters; the ranges are engineering choices tuned to a visible
+but plausible effect size on our own images. Both are wide-capture-only and gated off by default, so
+Phase 1 output is byte-identical (verified: seed 7000 renders byte-for-byte unchanged).
+
+31. **Multiplicative speckle** (`driftsense/physics.py: apply_speckle`) — `I_out = I_in·(1 + n)`,
+    `n ~ N(0, σ²)`, applied to the wide capture before photon counting. A signal-dependent
+    granularity term (it scales with local intensity, unlike additive read noise), a standard entry
+    in the SEM/detector noise taxonomy in Goldstein et al., *Scanning Electron Microscopy and X-Ray
+    Microanalysis*, 4th ed., Springer, 2018 (the same general reference already cited for
+    astigmatism). Drawn on ~50% of enabled pairs, σ ∈ [0.03, 0.12] — an engineering range, not a
+    measured coefficient.
+32. **Salt-and-pepper (impulse) noise** (`driftsense/physics.py: apply_salt_pepper`) — a small
+    fraction of wide-capture pixels are forced to 0 (dead) or 255 (saturated), modelling stuck
+    detector pixels. Classical impulse-noise model (same textbook taxonomy). Applied last in the
+    chain, since a stuck pixel overrides the underlying signal and any additive noise on it. Drawn on
+    ~40% of enabled pairs, fraction ∈ [0.001, 0.01] — again an engineering range, not a measured
+    SEM defect rate.

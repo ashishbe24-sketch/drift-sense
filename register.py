@@ -117,15 +117,18 @@ def run(input_csv: pathlib.Path, output_csv: pathlib.Path,
     # route.predict_full() falls back to classical x,y when net is None, so this
     # always runs even on the no-GPU reference machine.
     #
-    # best_phase2_rot8k.pt is the rotation-aware retrain (31 Aug): fine-tuned
-    # from best_phase2.pt on 8000 pairs whose --phase2 generator now bakes in
-    # relative +-5 rotation, which best_phase2.pt never saw. Same architecture,
-    # so identical CPU latency. On the 100-pair held-out set it matches/edges the
-    # old net (84% vs 83% @5px, 85% vs 81.7% on the n=60 quick-eval) and is
-    # trained on the correct Phase 2 distribution -- see PHASE2_RESEARCH_NOTES.md.
-    # best_phase2.pt is kept as a fallback; revert this one line to roll back.
+    # best_phase2_speckle.pt is the noise-coverage retrain (1 Sep): warm-started
+    # from best_phase2_rot8k.pt on 4000 --phase2 pairs that now also carry
+    # multiplicative speckle + salt-and-pepper impulse noise (standard SEM
+    # detector degradations the generator previously did not model). On the noisy
+    # eval it beats the rot8k net by +5 pp @5px (82% vs 77%), and is a within-
+    # noise wash on the clean eval (82% vs 84%) -- i.e. more uniform across
+    # distributions. Same architecture, identical CPU latency. Its lineage is
+    # best_phase2.pt -> best_phase2_rot8k.pt -> this; both earlier checkpoints are
+    # kept as fallbacks. Revert this one line to roll back to rot8k. See
+    # PHASE2_RESEARCH_NOTES.md for the full comparison.
     _phase2_ckpt = (pathlib.Path(__file__).resolve().parent / "driftmatch" /
-                    "checkpoints" / "best_phase2_rot8k.pt")
+                    "checkpoints" / "best_phase2_speckle.pt")
     net, device = route.load_net(_phase2_ckpt)
 
     out_rows, n_found = [], 0

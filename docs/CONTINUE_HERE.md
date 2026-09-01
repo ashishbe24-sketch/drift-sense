@@ -35,14 +35,21 @@ from ~5% to ~70% overnight on 29 Aug, closing the single biggest gap). Breakdown
 **The biggest unknown, not a percentage:** everything has been validated only on our own
 generator. None of it has touched the organizers' actual data or sample pairs yet.
 
-## Two open questions for the organizers (not yet answered as of last session)
+## Two open questions for the organizers -- ANSWERED (1 Sep)
 
 1. Does "materially different from Phase 1 approach" tolerate extending the router with scale
-   search + absent-pair rejection + a net retrained on the wider distribution? (High confidence
-   the answer is yes — the addendum's own language says "extend, don't rewrite" — but not
-   confirmed.)
+   search + absent-pair rejection + a net retrained on the wider distribution?
+   **Mentor answer: "Yes, they can definitely continue with the Phase 1 architecture and extend
+   it. It's expected that they'll need to make adjustments to address the requirements for
+   Phase 2."** Confirms our whole approach is compliant, including the 1 Sep change to which
+   component (classical vs net) leads on `x,y` -- that is a threshold/policy adjustment within
+   the same two declared components, not a new architecture.
 2. Is the Rejection F1 computed with `found=1` or `found=0` as the positive class, or
-   macro-averaged? Affects how aggressively the reject threshold should be tuned.
+   macro-averaged?
+   **Mentor answer: standard binary-classification F1, no further disambiguation given.** Does
+   not resolve which convention is used -- `scripts/score_phase2.py` already reports all three
+   (`present+`, `absent+`, macro) for exactly this reason; no change needed, keep reporting all
+   three.
 
 ## Priority order for continuing
 

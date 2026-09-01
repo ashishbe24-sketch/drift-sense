@@ -83,6 +83,12 @@ data/fmt_test200/
 # Set C absent-pair fix: fresh rejection test set, regeneratable from seed 960000.
 data/p2reject_test300/
 
+# Noise-coverage task (speckle + salt-and-pepper): regeneratable from seeds
+# 970000 / 980000. checkpoints_speckle is a per-run scratch checkpoint dir.
+data/p2train_speckle4k/
+data/p2eval_speckle100/
+driftmatch/checkpoints_speckle/
+
 # Real organizer validation data (shared privately by the mentor) -- must
 # never be committed to this public repo. Local-only, used for diagnosis.
 data/organizer_sample/

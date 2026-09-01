@@ -145,6 +145,8 @@ class PairSpec:
             wide_barrel_k1=round(w.barrel_k1, 4),
             wide_vignette=round(w.vignette_strength, 3),
             wide_gamma=round(w.gamma, 3),
+            wide_speckle_sigma=round(w.speckle_sigma, 4),
+            wide_sp_fraction=round(w.sp_fraction, 5),
             ref_drift_nm=round(r.drift_nm, 2), wide_drift_nm=round(w.drift_nm, 2),
             ref_vib_nm=round(r.vibration_nm, 2), wide_vib_nm=round(w.vibration_nm, 2),
         )
@@ -160,7 +162,8 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
                 wide_px_nm: float = 10.0, scale_range: tuple | None = None,
                 signed_rotation: bool = False, absent: bool = False,
                 scan_distortion_max: float = 0.0,
-                optical_aberrations: bool = False) -> PairSpec:
+                optical_aberrations: bool = False,
+                speckle: bool = False, salt_pepper: bool = False) -> PairSpec:
     """Draw every parameter of one pair from `seed` alone.
 
     Phase 2 options, both gated so the default (Phase 1) call is byte-identical:
@@ -269,6 +272,19 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
     else:
         astig_sigma = astig_angle = barrel_k1 = vignette = 0.0
         gamma = 1.0
+    # Multiplicative speckle and salt-and-pepper impulse noise -- standard SEM /
+    # detector degradation categories (Goldstein et al. taxonomy) our generator
+    # did not previously model. Independently gated, each drawn on ~40-50% of
+    # enabled pairs so training sees a mix. All zero unless enabled, so Phase 1
+    # seeds draw nothing here and stay byte-identical.
+    if speckle:
+        speckle_sigma = float(rng.uniform(0.03, 0.12)) if rng.random() < 0.5 else 0.0
+    else:
+        speckle_sigma = 0.0
+    if salt_pepper:
+        sp_fraction = float(rng.uniform(0.001, 0.01)) if rng.random() < 0.4 else 0.0
+    else:
+        sp_fraction = 0.0
     wide = CaptureParams(
         px_nm=wide_px_nm,
         probe_sigma_nm=ref.probe_sigma_nm * current_boost,
@@ -284,6 +300,7 @@ def sample_spec(seed: int, style: str | None = None, n_px: int = 1000,
         scan_distortion_px=scan_dist,
         astig_extra_sigma_nm=astig_sigma, astig_angle_deg=astig_angle,
         barrel_k1=barrel_k1, vignette_strength=vignette, gamma=gamma,
+        speckle_sigma=speckle_sigma, sp_fraction=sp_fraction,
         dose_e_per_grey=wide_dose,
         read_sigma=float(rng.uniform(1.0, 3.5)),
     )
