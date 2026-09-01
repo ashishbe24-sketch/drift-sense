@@ -1450,3 +1450,64 @@ change than the deadline allows.
 
 Files: `driftsense/sampling.py` (severity ladder) + this note. Datasets regenerated locally,
 gitignored; organizer data untouched and uncommitted.
+
+---
+
+## CPU-latency benchmark, done properly with core affinity + net-on-CPU (2 Sep)
+
+Supersedes the 1 Sep rough note (thread-caps only). This one pins the process to 4 cores and adds the
+net-on-CPU measurement that gates the "could we re-enable the net for x,y" decision.
+
+**Methodology (reproducible).** Simulate the grader (4-core x86 / 8 GB / no GPU). Thread caps set
+BEFORE the first numpy/scipy import: `OMP_NUM_THREADS=MKL_NUM_THREADS=OPENBLAS_NUM_THREADS=4`. Process
+pinned to 4 logical cores via **`psutil.Process().cpu_affinity([0,1,2,3])`** (Windows) at the top of
+the harness, before heavy compute. First pair discarded as warm-up (FFT-plan / kernel cache). Times
+are per-pair `route.predict_full` (Measurement 1) and per-pair `net_response` (Measurement 2).
+
+### Measurement 1 -- shipped classical path (torch-free venv: numpy/scipy/pillow, torch absent)
+
+| set | median | P95 | max | vs 5 s median | vs 20 s cap |
+|---|---|---|---|---|---|
+| organizer 20-pair | 1462 ms | 1670 ms | 2381 ms | **PASS** (3.4x) | **PASS** (8.4x) |
+| **p2eval100 (100 present)** | **1658 ms** | **1924 ms** | 2361 ms | **PASS** (3.0x) | **PASS** (8.5x) |
+
+Includes the SCAN_ANGLES p008 fix (which added ~42% vs the pre-fix path). Comfortable: on the larger
+p2eval100 sample the median is 1.66 s (33% of the 5 s budget) and the worst single pair 2.36 s (12% of
+the 20 s hard cap). Affinity-pinned numbers match the thread-caps-only 1 Sep figures, re-confirming the
+classical path is effectively single-threaded (core count barely matters; per-core speed does).
+
+### Measurement 2 -- DriftMatchNet forward pass on CPU (CPU-build torch 2.14.0+cpu, cuda False)
+
+Same 4-core affinity; `torch.set_num_interop_threads(1)`; swept intra-op threads:
+
+| `set_num_threads` | net forward median | P95 |
+|---|---|---|
+| 1 | 4017 ms | 4216 ms |
+| 2 | 2363 ms | 2490 ms |
+| **4 (best)** | **2017 ms** | 2245 ms |
+
+Contrary to the small-model expectation, MORE threads is FASTER here -- DriftMatchNet is a conv net
+over 1000x1000 inputs, so it is compute-heavy on CPU (vs ~45 ms/pair on the RTX 3050). Best CPU config
+is 4 threads at **~2.0 s/pair**.
+
+**Projection if the net were re-enabled for x,y** (classical + net, both required per pair):
+median 1.66 s + 2.02 s = **~3.67 s/pair (73% of the 5 s budget)**; P95 ~1.92 + ~2.25 = **~4.2 s (83%)**.
+That is uncomfortably close and would likely BREACH 5 s on a grader whose cores are slower than ours,
+or on the harder 200-pair set.
+
+### Conclusions / recommendation
+- **Shipped classical path is comfortably inside budget** (median 1.66 s, 33% of 5 s; max 2.36 s, 12%
+  of the 20 s cap). No action needed.
+- **Do NOT re-enable the net for x,y.** The earlier decision (classical x,y) was made on accuracy (the
+  net overfit our generator, 84% ours vs 13/14 classical on real data); this benchmark shows it is
+  ALSO the right call on latency -- re-enabling would ~triple per-pair CPU cost to ~3.67 s median /
+  ~4.2 s P95 for zero accuracy gain and real timeout risk. Net stays available via `use_net_xy` but
+  off by default. (Measurement only -- `route.py` unchanged.)
+- **If the grader ever proves slower than expected**, the cheapest safe lever is trimming the search
+  grid density -- `SCAN_ANGLES`/`PHASE2_ANGLES` (5 pts) or `PHASE2_SCALES` (9 pts at 0.5 steps) -- each
+  roughly proportional in the scale/angle search. RECOMMENDATION only; NOT applied, since the shipped
+  path has 3x headroom and trimming would risk the p008-class scale/rotation accuracy. No accuracy-
+  affecting logic was changed to make these numbers.
+
+No code change from this task -- measurement only. Benchmark scripts + the CPU-torch/psutil envs are
+local (scratchpad), not committed.
