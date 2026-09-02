@@ -76,7 +76,23 @@ def _resolve(path_str: str, root: pathlib.Path) -> pathlib.Path:
 
 
 def _load_gray(path: pathlib.Path) -> np.ndarray:
-    img = np.asarray(Image.open(path).convert("L"))
+    """Load an image as a single-channel grayscale array.
+
+    Sets A/B/C ship single-channel ('L') SEM images; Set D (the optical-RGB
+    bonus track) ships 3-channel RGB. Both feed the same classical matcher: any
+    non-grayscale mode (RGB/RGBA/palette) is converted to luminance -- PIL's
+    convert('L') applies ITU-R 601 luma (0.299R + 0.587G + 0.114B). An image
+    already in 'L' mode is returned untouched, so the A/B/C grayscale output is
+    byte-identical to loading it directly -- Set D support costs the grayscale
+    path nothing.
+    """
+    im = Image.open(path)
+    if im.mode != "L":
+        # Set D optical-RGB (or any multi-channel input) -> luminance.
+        print(f"[register] {path.name}: {im.mode} -> L (luma), Set D optical path",
+              file=sys.stderr)
+        im = im.convert("L")
+    img = np.asarray(im)
     if img.ndim != 2:
         raise ValueError(f"{path}: expected 2-D grayscale, got shape {img.shape}")
     if img.shape != EXPECTED_SHAPE:
