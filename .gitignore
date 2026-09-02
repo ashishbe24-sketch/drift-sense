@@ -99,3 +99,9 @@ data/amp_train/
 driftmatch/checkpoints_amp/
 AMP_Phase 2 material/
 Dataset_AMP_Phase 2/
+data/amp_train2/
+data/amp_holdout/
+data/amp_all/
+amp_*_log.txt
+amp_orchestrator.txt
+amp_experiment_log.txt

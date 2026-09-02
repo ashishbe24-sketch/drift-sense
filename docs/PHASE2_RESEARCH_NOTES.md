@@ -1511,3 +1511,76 @@ or on the harder 200-pair set.
 
 No code change from this task -- measurement only. Benchmark scripts + the CPU-torch/psutil envs are
 local (scratchpad), not committed.
+
+---
+
+## Retrain on the ORGANIZERS' own generator: the overfit diagnosis proved, classical still wins (2 Sep)
+
+The single most-cited assumption in this project has been "the net overfit our generator." Until now
+that was an inference from one comparison. This experiment tested it directly by removing the
+suspected cause -- our generator -- and changing nothing else.
+
+**Compliance, stated first.** Applied Materials shared their Phase 2 generator SOURCE alongside the
+20-pair sample. Running that source with NEW seeds and NEW randomised poses to synthesise NEW
+training pairs is a shared-tool use (the same thing Phase 1 did with their Phase 1 generator, which
+took the net 71% -> 95.5% there). Their 20 sample pairs were NEVER trained on, never fitted to, and
+were scored exactly once at the end with the checkpoint already frozen. Our own generator
+(`driftsense/`, `generate_dataset.py`) remains the shipped deliverable for the generator/citations
+bucket; nothing about it changed here.
+
+**Data.** `scripts/gen_amp_training.py` -- their `generate_phase2_samples.py` hard-codes a 20-row
+PLAN and exposes only `--seed`, so re-seeding reuses the same 20 (zoom, theta) combos: noise
+diversity but no pose diversity, useless for training. The wrapper instead calls their
+`generate_phase2_sample(arch, params, rng)` directly with randomised architecture (all 12 presets),
+zoom U[8,12], theta U[-5,+5] and severity 0-4 (weighted 34/26/20/13/7). Their own label-verification
+gate was used as a filter -- **2996 pairs kept, 4 dropped**, so every training label is provably
+hittable. A 250-pair held-out set (seed 990000, disjoint) was generated for checkpoint selection.
+Verified independently before training: our classical matcher localises their generated pairs to
+0.31-1.26 px and recovers scale/theta with the correct sign -- a third confirmation of the theta
+convention, this time against their code.
+
+**Training.** Fine-tuned from `best_phase2_speckle.pt`, 12 epochs, batch 4, lr 1.5e-4, ~5.4 min/epoch
+on the RTX 3050. Checkpoint selected on the held-out AMP set, NOT on the organizers' pairs.
+
+| epoch | 1 | 2 | 4 | 6 | 8 | 10 | 12 |
+|---|---|---|---|---|---|---|---|
+| loss | 0.915 | 0.622 | 0.465 | 0.385 | 0.337 | 0.308 | 0.298 |
+| held-out | 85.0 | 88.3 | 90.0 | **91.7** | 91.7 | 91.7 | 90.0 |
+
+Loss fell monotonically while held-out rose then went FLAT (not down) -- healthy convergence, not the
+peak-then-decline overfit signature the 31 Aug retrain showed. Best held-out 91.7% at epoch 6.
+
+### Decisive comparison, organizers' 20 real pairs (scored once, checkpoint frozen)
+
+| Config | Localization /40 | within 5px | Set A | Set B | median s/pair |
+|---|---|---|---|---|---|
+| **classical (shipped)** | **35.60** | 15/16 | 1.000 | 0.800 | 2.9 |
+| net trained on OUR generator | 13.35 | 7/16 | 0.375 | 0.300 | 3.2 |
+| net trained on THEIR generator | 28.78 | 15/16 | 0.825 | 0.633 | 3.2 |
+
+**The overfit diagnosis is confirmed, with a large effect.** Same architecture, same hyperparameters,
+same everything except the training distribution: 13.35 -> 28.78 /40, and 7/16 -> 15/16 sites found.
+The net was never architecturally inadequate; it had learned our renderer's statistics.
+
+**But classical still wins, and the reason is specific and worth recording:** the AMP-trained net now
+finds the right site as often as classical (15/16 each) -- it loses on PRECISION once there. Set A
+credit 0.825 vs 1.000 means the net routinely lands inside 5 px but outside 1 px, forfeiting tier
+credit that classical's parabolic sub-pixel refinement collects. Localisation here is scored on tiers,
+not on a hit/miss threshold, so "same recall, worse precision" costs 6.8/40.
+
+**Decision: NOT adopted. `route.py`, `register.py`, `solve.py` and every shipped checkpoint are
+unchanged; `use_net_xy` stays False.** Adoption required beating classical, and it does not. It also
+would have cost ~2 s/pair extra (the CPU-latency entry above) for a worse score.
+
+**Caveats, stated honestly.** (1) 16 present pairs -- one pair is ~6 pp, so only the large gaps here
+(13.35 vs 28.78 vs 35.60) are meaningful; the 15/16-vs-15/16 tie is not a distinguishing result.
+(2) Their generator has 12 fixed architecture presets, so the net learned those 12 well; that is
+legitimate for a graded set drawn from the same presets, but it is not evidence of robustness to
+unseen SEM imagery. (3) The `p2eval100` forgetting check did not run (that dataset lives on the other
+machine), so "did the AMP net forget our distribution" is formally unanswered -- immaterial to the
+decision, since classical won regardless.
+
+**Why this was worth doing even though nothing shipped changed:** it converts the project's central
+claim from an assumption into a measured result. The failure-analysis write-up can now say we removed
+the suspected cause, more than doubled the learned matcher's real-data score, and classical still won
+on sub-pixel precision -- rather than asserting that a learned component was unnecessary.
