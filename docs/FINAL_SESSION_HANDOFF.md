@@ -3,8 +3,15 @@
 
 You are picking up a project that is **technically complete and validated against the organizers'
 real data**. The remaining work is almost entirely non-technical packaging. Your job in this session
-is to verify everything end-to-end, produce the four missing deliverables, and ship. Do not start
+is to verify everything end-to-end, produce the missing deliverables, and ship. Do not start
 new algorithmic work unless this document explicitly flags it as open.
+
+> **UPDATE 2 Sep — read [`docs/ORGANIZER_MATERIALS_DIGEST.md`](ORGANIZER_MATERIALS_DIGEST.md) next.**
+> All the mentor-supplied Phase 2 material was re-read end-to-end, including the dataset-generator
+> prompt, which had never been distilled into these docs. It closes three open risks, independently
+> vindicates two of our decisions, **invalidates one section of the failure-analysis draft**, and
+> **adds one deliverable (`README.md`) that this document does not list**. Corrections are
+> inlined below and marked `[2 Sep]`.
 
 ---
 
@@ -15,7 +22,7 @@ new algorithmic work unless this document explicitly flags it as open.
 | **Problem** | PS-02 "Drift-Sense", SEMICON India Hackathon 2026, Applied Materials |
 | **Team** | "The T Guys" — Aryan Chourasia (lead), Govinda Podder, Ashish Bajaj + Devaansh Gupta (teammate doing GPU work) |
 | **Repo** | https://github.com/itsAryan-devop/drift-sense (public), branch `main`, HEAD `e847f17` |
-| **Current real-data score** | **Localization 35.60/40 (89%)**, rejection F1 0.968, pose theta 10/10, scale ~8.9/10 |
+| **Current real-data score** | **Localization 35.60/40 (89%)**, rejection F1 0.968, pose theta 10/10, **scale 8.62/10** |
 | **Shipped algorithm** | Classical NCC (`solve.py`) supplies x,y AND theta/scale/found/score. The CNN exists but is **off by default**. |
 | **Runtime** | 1.5–2.9 s/pair CPU-only (budget: 5 s median, 20 s hard timeout) |
 | **STILL MISSING** | **Phase 2 PPT, failure_analysis.pdf (≤2 pages), demo video, final zip** — all at ZERO |
@@ -62,7 +69,16 @@ the zip. **Runtime: median ≤5 s/pair, hard timeout 20 s = that pair scores zer
 | 10 | Calibration | AUC of `score` vs per-pair correctness |
 | 5 | Efficiency | Relative quartile ranking on median wall-clock. **Exceeding 5s costs ranking, does NOT zero anything** |
 | 10 | Generator + citations + failure analysis | Re-judged under Phase 2 conditions |
-| +10 | Bonus | +6 Set D (if A–C ≥0.50); **+4 if rejection F1 ≥ 0.90 — we are at 0.968, this is in reach** |
+| +10 | Bonus | +6 Set D (if A–C ≥0.50); +4 if rejection F1 ≥ 0.90 — we are at 0.968, already clear |
+
+**[2 Sep] The bonus is a TIE-BREAKER, not points.** Mentor, verbatim: *"Does the bonus change the
+ranking? No, no, it doesn't… it cannot lift a team above 100 for ranking. It's just the best second
+tiebreaker after maybe set B credit."* We already clear the F1 gate — nothing to chase. Do not
+present it in any deliverable as if it lifts the score.
+
+**[2 Sep] Rejection F1 is computed over the 180 grayscale pairs (A+B+C); Set D is excluded.** FP and
+FN weigh equally; the jury breaks them out separately and may use which way a team leans as a
+tiebreak.
 
 Only **5 teams per problem statement** advance from the 15 shortlisted.
 
@@ -111,9 +127,9 @@ Everything else in this project is self-graded on our own generator and has hist
 |---|---|
 | **Localization** | **35.60 / 40** (Set A mean credit **1.000**, Set B **0.800**) |
 | Present pairs within 5px | **15 / 16** |
-| **Rejection F1 (present+)** | **0.968** (TP 15, FP 0, FN 1) — **+4 bonus reachable** |
+| **Rejection F1 (present+)** | **0.968** (TP 15, FP 0, FN 1) — clears the +4 bonus gate (a tiebreaker, not points) |
 | Pose — theta | **10 / 10** (sign confirmed against their ground truth) |
-| Pose — scale | ~8.9 / 10 |
+| Pose — scale | **8.62 / 10** (was 8.00 before the 2 Sep reported-pose clamp) |
 | Calibration AUC | 0.725–0.789 |
 | Runtime (classical, CPU) | 1462 ms (teammate's box) / 2843 ms (Aryan's box) median |
 
@@ -215,9 +231,28 @@ Training curve was healthy (held-out rose then plateaued, no overfit signature).
    - **`THETA_SIGN` was backwards** on first guess; caught by building a synthetic test, not assumed.
    - **p011/p012**: genuinely inherent — their own baseline also scores 0 credit on them.
    - Honest limitation: our present-pair degradation is still too mild (4% below 0.55 vs their ~50%).
+
+   > **[2 Sep] DO NOT reuse draft §2 ("a large fraction of failures are unsolvable by
+   > construction").** Their dataset prompt §5 mandates a label-verification gate — every present
+   > pair's global NCC peak must land within 3 px of the label with a margin ≥0.02, cross-checked by
+   > a second renderer, or the pair is resampled/dropped. So **every present pair in the graded set
+   > is provably hittable.** That framing is true of our generator and false of theirs; using it
+   > would read as an excuse. Two better, *measured* additions are in
+   > [`ORGANIZER_MATERIALS_DIGEST.md`](ORGANIZER_MATERIALS_DIGEST.md) §1.2 and §1.6 — the off-grid
+   > scale residual, and the decoy large-scale-structure signature. Both are diagnosed, both
+   > deliberately not implemented; the prompt says an honest limitations list is where the marks are.
 2. **Final zip assembly + fresh-clone verification** (§5.2). Contents per slide 5: `register.py`,
    `generate_dataset.py` (documented), model weights, `requirements.txt` (already regenerated, torch
    optional), `failure_analysis.pdf`, citations (`docs/GENERATOR_SPEC.md`).
+3. **[2 Sep] `README.md` — not a slide-5 zip item, but do it anyway; it is cheap and it is asked
+   for.** It is still the **Phase 1** README: it opens with *"94.5% accuracy @5px … ~150–430 ms per
+   pair on a 4 GB laptop GPU"*, never mentions `register.py`, and §4.3 is titled *"Why a router
+   instead of just the better model"* — which contradicts the shipped classical-led, CPU-only
+   config. It is the first file a judge opens. The mentor also made one explicit README request we
+   have not answered: *"your own confidence… if you can mention that in your readme, that'll be
+   really good, because that way we can quickly read the readme on how you have found your
+   confidence"* — we document the `score` column nowhere, and it sits next to the 10-pt calibration
+   bucket.
 
 **NOT required by the Phase 2 task deck** (build only if the submission portal asks): a Phase 2 PPT,
 a demo video. Phase 1's `driftsense-demo.mp4` is stale and untracked; leave it out.
@@ -331,11 +366,21 @@ is genuinely strong.
 
 ## 10. RECOMMENDED PRIORITY FOR THIS SESSION
 
-1. **`failure_analysis.pdf`** — highest unclaimed point value (part of 10 pts), material is ready.
-2. **Phase 2 PPT** — required for submission to be accepted at all.
-3. **Final zip + fresh-clone verification** (§5.2 checklist).
-4. **Demo video** — optional, do last.
+**[2 Sep] Rewritten — §5.1 was corrected against the official task deck (no PPT, no video required)
+and this list had not been updated to match.**
+
+1. **Fresh-clone verification** (§5.2) — ~15 min, and it is the only item that can silently zero the
+   whole submission. A broken `register.py` on a clean checkout scores nothing no matter how good
+   the PDF is; everything else merely loses points. Run it first, then write knowing the artifact
+   is sound.
+2. **`failure_analysis.pdf`** — highest unclaimed point value (part of 10 pts). Material is ready,
+   but read the `[2 Sep]` note in §5.1 first: one draft section must not be reused.
+3. **Final zip assembly.**
+4. **`README.md` refresh** — currently advertises Phase 1 numbers and a GPU runtime; also carries
+   the mentor's one explicit README request (document the `score`/confidence column). Cheap.
 5. Only if all above are done: touch nothing else. The technical work is finished and validated.
+   A Phase 2 PPT and demo video are **not** required by the task deck — build them only if the
+   submission portal separately asks.
 
 **Do NOT:** retrain, change `FOUND_PEAK`, re-enable the net, trim the search grids, revisit
 Fourier-Mellin, or start new model architectures. Every one of these has been tested and settled,

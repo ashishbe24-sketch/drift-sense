@@ -144,6 +144,36 @@ def locate(reference, wide, net=None, device="cpu", ratio=MULTI_RATIO):
 # the diagnostic that prompted the re-examination, not the source of the value.
 FOUND_PEAK = 0.53
 
+# Bounds on the REPORTED pose. Both ranges are disclosed in the Phase 2 addendum
+# (zoom z in [8,12], rotation theta in [-5,+5]) and the mentor confirmed hard-coding
+# them is allowed: "Hard code the bounds, yes, definitely you can hard code the
+# bounds." Applied Materials' own dataset prompt (Section 2.4) goes further and
+# REQUIRES the graded set to reach both endpoints -- z at exactly 8.00 and 12.00,
+# theta within 0.1 deg of both -5 and +5 -- so boundary pairs are guaranteed to be
+# in the blind 200, not merely possible.
+#
+# Why this is needed: the golden-section refinements in solve.py bracket around the
+# best grid point and can converge slightly PAST an endpoint. Measured on the
+# organizers' 20-pair sample, p001 reported z=7.882 against a truth of 8.00 (1.48%
+# error) and p013 reported 12.174 against 12.00 (1.45%) -- each forfeiting a whole
+# scale tier (>1% drops 1.00 -> 0.60) purely by overshooting a bound we were told.
+#
+# Why the clamp lives HERE and not in solve.py's search: clamping inside the scale
+# or angle search could change which candidate wins, which changes the stamp used
+# for correlation, which can move x,y. At the reporting layer it is provably inert
+# for everything else -- `scale` and `theta` are pass-through columns that feed
+# neither the localisation nor `found`/`score`. And it is monotone: ground truth is
+# guaranteed inside the range, so pulling an out-of-range estimate to the boundary
+# can only reduce its error, never increase it. A value already in range is
+# untouched.
+SCALE_BOUNDS = (8.0, 12.0)
+THETA_BOUNDS = (-5.0, 5.0)
+
+
+def _clamp(value, bounds):
+    lo, hi = bounds
+    return min(max(value, lo), hi)
+
 
 @dataclasses.dataclass
 class PairResult:
@@ -211,7 +241,11 @@ def predict_full(reference, wide, net=None, device="cpu",
     # present/absent-mixed AUC may be refined once Q3 is answered.
     score = info["score"]
     found = int(score >= found_threshold)
-    return PairResult(x=x, y=y, theta=info["theta"], scale=info["scale"],
+    # Reporting-layer clamp only -- see SCALE_BOUNDS/THETA_BOUNDS above. x, y,
+    # found and score are passed through exactly as computed.
+    return PairResult(x=x, y=y,
+                      theta=_clamp(info["theta"], THETA_BOUNDS),
+                      scale=_clamp(info["scale"], SCALE_BOUNDS),
                       found=found, score=score)
 
 

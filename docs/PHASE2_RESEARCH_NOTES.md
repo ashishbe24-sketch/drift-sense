@@ -1584,3 +1584,59 @@ decision, since classical won regardless.
 claim from an assumption into a measured result. The failure-analysis write-up can now say we removed
 the suspected cause, more than doubled the learned matcher's real-data score, and classical still won
 on sub-pixel precision -- rather than asserting that a learned component was unnecessary.
+
+## Reported-pose clamp to the disclosed bounds: +0.62 on scale, everything else provably untouched (2 Sep)
+
+Found while running the pre-submission verification sweep (fresh clone, torch-free venv), not by
+looking for it: three of the recovered `scale` values on the organizers' 20-pair sample fall
+**outside the disclosed [8,12] range**.
+
+`solve.py`'s golden-section refinements bracket around the winning grid point and can converge
+slightly past an endpoint. Nothing stopped them, so:
+
+| pair | reported | truth | error | tier |
+|---|---|---|---|---|
+| p001 | 7.882 | 8.00 | 1.48% | 0.60 (would be 1.00) |
+| p013 | 12.174 | 12.00 | 1.45% | 0.60 (would be 1.00) |
+| p014 | 7.972 | 8.00 | 0.36% | 1.00 (already in tier) |
+
+This is not a rare edge case on the blind set. Applied Materials' own dataset prompt, Section 2.4,
+**requires** the graded set to reach both endpoints exactly -- `z` at 8.00 and 12.00, `theta` within
+0.1 deg of both -5 and +5 -- so boundary pairs are guaranteed, not merely possible.
+
+**The fix, and where it deliberately does NOT live.** Clamping the *reported* `scale` to [8,12] and
+`theta` to [-5,+5], in `route.predict_full` at the `PairResult` construction
+(`route.SCALE_BOUNDS` / `THETA_BOUNDS` / `_clamp`). It is explicitly **not** applied inside
+`solve.py`'s scale or angle search: clamping there could change which candidate wins, which changes
+the stamp used for correlation, which can move `x,y`. At the reporting layer `scale`/`theta` are
+pass-through columns feeding neither localisation nor `found`/`score`, so localisation and rejection
+are mathematically untouchable.
+
+The clamp is **monotone**: ground truth is guaranteed inside the disclosed range, so pulling an
+out-of-range estimate onto the boundary can only reduce its error. An in-range value is untouched.
+Hard-coding the bounds is explicitly permitted -- mentor, verbatim: *"Hard code the bounds, yes,
+definitely you can hard code the bounds."*
+
+**Measured, fresh clone + torch-free venv, organizers' 20 pairs:**
+
+| | before | after |
+|---|---|---|
+| Localization | 35.60/40 | **35.60/40** (identical) |
+| Rejection F1(present+) | 0.968 (TP15 FP0 FN1) | **0.968** (identical) |
+| Scale sub-score (13 scored pairs) | 8.00/10 (sum 10.40) | **8.62/10** (sum 11.20) |
+| theta | 10/10 | 10/10 (no-op here: max abs theta seen 4.86) |
+
+A column-level diff of the two prediction CSVs confirms **zero** changes in `x`, `y`, `found` and
+`score`; the only deltas are the three out-of-range scales moving to their boundary. The theta clamp
+is a no-op on this sample by construction and is in place for the blind set, where the same
+overshoot mode exists and both endpoints are guaranteed present.
+
+**Record correction.** The handoff had been quoting scale as "~8.9/10". That figure is not
+reproducible -- the hand-computed value over the 13 scored pairs (Set A+B, localisation credit > 0,
+so p012 excluded) is **8.00/10 pre-clamp, 8.62/10 post-clamp**. Corrected in
+`FINAL_SESSION_HANDOFF.md` so `failure_analysis.pdf` does not cite a number we cannot reproduce.
+
+**Not pursued:** the residual ~1.4 pts is genuine off-grid refinement error (p008 11.58 vs 11.90,
+p019 9.88 vs 10.30, p009 9.15 vs 9.40). Closing it means touching the search itself, which can move
+`x,y` -- out of scope this close to the deadline. Documented in
+`docs/ORGANIZER_MATERIALS_DIGEST.md` Section 1.2 as the best-motivated future lead.
