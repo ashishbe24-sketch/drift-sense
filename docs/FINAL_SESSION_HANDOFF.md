@@ -188,7 +188,21 @@ Training curve was healthy (held-out rose then plateaued, no overfit signature).
 
 ## 5. WHAT REMAINS — THIS IS YOUR JOB
 
-### 5.1 MANDATORY DELIVERABLES (all at zero, deadline 3 Sep 23:59)
+### 5.1 MANDATORY DELIVERABLES (deadline 3 Sep 23:59)
+
+> **CORRECTED 2 Sep after reading the official `Applied Materials_Phase 2_Task.pptx` (slide 5).**
+> An earlier draft of this file listed a Phase 2 PPT and a demo video as mandatory. **They are not.**
+> Slide 5 ("ALSO IN THE ZIP") lists exactly: `requirements.txt` from pip freeze, `generate_dataset.py`
+> documented, and `failure_analysis.pdf` (max 2 pages) — plus the `register.py` entry point and
+> weights shipping inside the zip. Slide 9 carries forward the Phase 1 code rules only ("Python only,
+> zip with a pip freeze environment, documented generator with cited sources").
+>
+> **Status: only TWO items are actually outstanding — `failure_analysis.pdf` and the zip assembly.**
+> `register.py`, `requirements.txt`, the documented generator and the 30-source citation ledger
+> (`docs/GENERATOR_SPEC.md`) are all done.
+>
+> *Caveat:* the submission **portal** may separately request a deck/PDF the way Phase 1's idea
+> submission did. The task deck does not require one. Verify on the portal before building a PPT.
 
 1. **`failure_analysis.pdf`, max 2 pages.** Source material is rich — use
    `docs/PHASE2_FAILURE_ANALYSIS_DRAFT.md` plus these genuinely strong, *measured* findings:
@@ -201,11 +215,17 @@ Training curve was healthy (held-out rose then plateaued, no overfit signature).
    - **`THETA_SIGN` was backwards** on first guess; caught by building a synthetic test, not assumed.
    - **p011/p012**: genuinely inherent — their own baseline also scores 0 credit on them.
    - Honest limitation: our present-pair degradation is still too mild (4% below 0.55 vs their ~50%).
-2. **Phase 2 PPT.** Phase 1 used the official i4C template. Numbers to feature: 35.60/40, F1 0.968,
-   theta 10/10, CPU-only 1.5s/pair, the 13.35→35.60 improvement arc.
-3. **Demo video** (optional but rewarded). Phase 1's `driftsense-demo.mp4` is stale.
-4. **Final zip:** `register.py`, `generate_dataset.py` (documented), model weights, `requirements.txt`
-   (already regenerated, torch optional), `failure_analysis.pdf`, citations.
+2. **Final zip assembly + fresh-clone verification** (§5.2). Contents per slide 5: `register.py`,
+   `generate_dataset.py` (documented), model weights, `requirements.txt` (already regenerated, torch
+   optional), `failure_analysis.pdf`, citations (`docs/GENERATOR_SPEC.md`).
+
+**NOT required by the Phase 2 task deck** (build only if the submission portal asks): a Phase 2 PPT,
+a demo video. Phase 1's `driftsense-demo.mp4` is stale and untracked; leave it out.
+
+**Runtime figure to quote in any deliverable** (measured on two machines, cite the range — quoting
+only the faster box would be cherry-picking): CPU-only, no GPU, **1.3–2.8 s/pair median**; worst
+single pair across 100 samples **1.47 s vs the 20 s hard timeout (13.6x margin)**. Latency is fully
+settled — do not re-benchmark, and do not trim the search grids for speed.
 
 ### 5.2 VERIFICATION CHECKLIST (do this before shipping)
 - [ ] `git pull` — confirm synced with `origin/main`
