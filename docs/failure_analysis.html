@@ -56,8 +56,10 @@ not assumed to</b> (§4.1).</p>
 </table>
 
 <p><b>[REAL]</b> localization <b>35.60/40</b> (Set A 1.000, Set B 0.800), 15/16 present within 5 px,
-rejection F1 <b>0.968</b>, rotation <b>10/10</b>, scale <b>8.62/10</b>, calibration AUC 0.789,
-CPU-only 1.3–3.5 s/pair against a 5 s budget. <b>[OURS</b>, their generator re-run, 350 pairs over two
+rejection F1 <b>0.968</b>, rotation <b>10/10</b>, scale <b>8.62/10</b>, calibration AUC 0.789.
+Runtime was measured on the reference machine profile rather than our development box —
+4 cores, 8 GB, Python 3.11 — over 200 pairs: <b>3.6 s/pair median</b>, worst pair 4.1 s, peak
+memory 176 MB, against a 5 s median budget and a 20 s hard timeout (4.9× margin). <b>[OURS</b>, their generator re-run, 350 pairs over two
 disjoint draws<b>]</b> rubric core <b>71.0–73.5/85</b>. <b>We expect the blind 200 nearer the second
 figure:</b> the sample's Set B is milder than the real one, and the organizers' own naive baseline
 scores 0.80 mean credit on it — above the 0.30–0.55 difficulty band their specification targets.</p>
