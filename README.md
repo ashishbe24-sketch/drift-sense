@@ -3,12 +3,42 @@
 **PS-02 · Applied Materials · SEMICON India Hackathon 2026 (i4C / IESA)**
 
 > Given a high-resolution **reference** image of a site and a wide, blurry,
-> low-resolution **search** scan taken after the stage has drifted, return the
-> pixel centre `(x, y)` of that site inside the search image — to within 5 px.
+> low-resolution **search** scan taken after the stage has drifted, recover where
+> that site sits inside the search image — its centre `(x, y)`, its pose
+> (`theta`, `scale`), whether it is present at all (`found`), and a confidence
+> (`score`).
 
-**Result: 94.5 % accuracy @5 px on the organizers' own reference test set, versus
-75.5 % for the provided ZNCC baseline — a +19 point improvement, at ~150–430 ms
-per pair on a 4 GB laptop GPU.**
+## ⭐ PHASE 2 SUBMISSION — START HERE
+
+**Entry point (the exact required signature):**
+
+```bash
+python register.py --input pairs.csv --output predictions.csv
+```
+
+**Measured on the organizers' own 20-pair sample, scored against their withheld
+ground truth** (never trained on, never used to tune a threshold):
+
+| Metric | Result |
+|---|---|
+| **Localization** | **35.60 / 40** — Set A 1.000, Set B 0.800; 15/16 present pairs within 5 px |
+| **Rejection** | **F1 0.968** (TP 15, FP 0, FN 1) |
+| **Pose** | rotation **10/10**, scale **8.62/10** |
+| **Calibration** | AUC 0.789 |
+| **Runtime** | **3.5 s/pair median** on a 4-core CPU, 175 MB peak RAM — no GPU, no torch, no network |
+
+Verified end-to-end on the reference machine profile (4-core, 8 GB, Python 3.11):
+install succeeds, output is byte-identical to our development box, and 0/200
+pairs approach the 20 s timeout. Failure analysis:
+**[`failure_analysis.pdf`](failure_analysis.pdf)**.
+
+> **Note on the sections below.** Everything after §1 documents the **Phase 1**
+> system and its 94.5 % @5 px result. That work is the foundation this submission
+> extends, and the numbers there are Phase 1 numbers measured under Phase 1
+> conditions (fixed 10× zoom, no rotation, reference always present, GPU). They
+> are kept for provenance — they are **not** the Phase 2 result, which is the
+> table above. `infer.py`, `predict*.py` are Phase 1 / research entry points;
+> **`register.py` is the Phase 2 submission entry point.**
 
 ---
 
@@ -118,31 +148,47 @@ python -m venv .venv
 # source .venv/bin/activate && pip install -r requirements.txt  # Linux/macOS
 ```
 
-### The submission entry point
+### The Phase 2 submission entry point
 
 ```bash
-python infer.py reference.png search.png
-```
-```
-558.72,409.06
+python register.py --input pairs.csv --output predictions.csv
 ```
 
-This matches the evaluator's expected interface exactly — the same
-`predict(reference_path, search_path) -> (x, y)` signature and the same
-comma-separated stdout format as the provided `baseline_solution/infer.py`, so
-it is a drop-in replacement in the existing harness:
+`pairs.csv` supplies `pair_id`, `reference_path`, `search_path`. Image paths are
+resolved relative to the CSV's own directory and to the working directory, so the
+command works from any location. `predictions.csv` contains **one row per
+`pair_id`, every id exactly once**:
 
-```python
-from infer import predict
-x, y = predict("reference.png", "search.png")
+```
+pair_id,x,y,theta,scale,found,score
+p001,331.222,840.813,-0.1393,8.0,1,0.910075
+p012,0.0,0.0,0.0,0.0,0,0.467089        <- found=0 writes 0 in every pose column
 ```
 
-The network is loaded once and cached across calls, so batch evaluation does not
-pay the load cost per pair.
+| Column | Meaning |
+|---|---|
+| `x, y` | match centre in search-image coordinates, sub-pixel (parabolic refinement) |
+| `theta` | rotation in degrees, CCW-positive about the match centre, clamped to the disclosed [-5, +5] |
+| `scale` | recovered down-scaling factor `z` in nm/px, clamped to the disclosed [8, 12] |
+| `found` | 1 / 0 — thresholded on the peak NCC at 0.53 |
+| `score` | **our confidence: the peak normalised cross-correlation, in [-1, 1].** Higher means more confident. It is the same quantity `found` thresholds, so the two are consistent by construction, and it is monotonic — suitable directly as the calibration ranking signal. |
 
-**It always runs.** If torch, CUDA or the checkpoint is unavailable, `infer.py`
-degrades silently to the pure-classical path rather than raising. The only hard
-dependencies are numpy, scipy and pillow.
+**Set D (optical RGB) needs no special invocation.** Any non-grayscale input is
+converted to luminance at load time (ITU-R 601) and fed to the same matcher;
+grayscale inputs are passed through untouched, so Sets A/B/C are bit-identical
+either way.
+
+**It always runs.** torch is *not* a dependency — `pip install -r requirements.txt`
+yields a torch-free environment, and the shipped path needs only numpy, scipy and
+pillow. If torch or the checkpoint is absent the router falls back to the
+classical path rather than raising. A pair whose image is missing or unreadable
+still emits a valid `found=0` row rather than aborting the run.
+
+### Other scripts (not the Phase 2 entry point)
+
+`infer.py`, `predict.py`, `predict_net.py`, `predict_router.py` are **Phase 1**
+CLIs kept for provenance; `fmt_pose.py` is a measured-and-rejected Fourier–Mellin
+experiment. None are used by `register.py`.
 
 ---
 
@@ -372,14 +418,20 @@ any figure was computed from.
 ## 6. Repository layout
 
 ```
-infer.py                        ★ SUBMISSION ENTRY POINT — predict(ref, search) -> (x, y)
+register.py                     ★ PHASE 2 SUBMISSION ENTRY POINT
+                                  --input pairs.csv --output predictions.csv
+failure_analysis.pdf            ★ Phase 2 failure analysis (2 pages)
 route.py                          DriftRoute: the router (classical + learned)
-solve.py                          DriftFind: classical matcher core
-predict.py                        CLI — classical only
-predict_net.py                    CLI — learned only
-predict_router.py                 CLI — router, batch mode
+solve.py                          DriftFind: classical matcher core — supplies all
+                                  six Phase 2 columns in the shipped configuration
 generate_dataset.py               dataset generator (standalone CLI)
-requirements.txt
+requirements.txt                  numpy / pillow / scipy only (torch NOT required)
+
+infer.py                          Phase 1 entry point (superseded by register.py)
+predict.py                        Phase 1 CLI — classical only
+predict_net.py                    Phase 1 CLI — learned only
+predict_router.py                 Phase 1 CLI — router, batch mode
+fmt_pose.py                       Fourier-Mellin experiment — measured and rejected
 
 driftmatch/                     the learned matcher
   model.py                        Siamese encoder + learned NCC + centre-point head
