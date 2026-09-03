@@ -105,3 +105,7 @@ data/amp_all/
 amp_*_log.txt
 amp_orchestrator.txt
 amp_experiment_log.txt
+
+# Stale Phase 1 demo video (23 MB); Phase 2 requires no video per the task deck.
+driftsense-demo.mp4
+*.mp4

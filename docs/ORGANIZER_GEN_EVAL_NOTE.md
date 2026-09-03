@@ -46,10 +46,10 @@ measures sampling noise, not just a single lucky/unlucky set.
 | Localization /40 (A/B-weighted) | **36.67** | **34.76** | 35.60 |
 | ↳ Set A mean credit | 0.915 | 0.898 | 1.000 |
 | ↳ Set B mean credit | 0.918 | 0.840 | 0.800 |
-| Pose — scale /10 | 7.43 | 7.25 | ~8.9 |
+| Pose — scale /10 | 7.43 | 7.25 | **8.62** |
 | Pose — rotation /10 | 8.41 | 8.49 | 10.0 |
-| Rejection F1 /15 | 13.60 (F1 0.907) | 13.13 (F1 0.876) | ~14.5 (F1 0.963) |
-| Calibration AUC /10 | 7.40 (0.740) | 7.40 (0.740) | ~0.73 |
+| Rejection F1 /15 | 13.60 (F1 0.907) | 13.13 (F1 0.876) | 14.52 (F1 0.968) |
+| Calibration AUC /10 | 7.40 (0.740) | 7.40 (0.740) | 7.89 (0.789) |
 | **Core /85 (auto-scorable)** | **73.51** | **71.03** | ~74 |
 | Runtime median | 1.27 s/pair | 1.30 s/pair | ~1.5 s/pair |
 

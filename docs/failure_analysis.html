@@ -1,0 +1,208 @@
+<meta charset="utf-8">
+<title>DriftSense Phase 2 — Failure Analysis</title>
+<style>
+  @page { size: A4; margin: 9mm 10mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+         font-size: 7.15pt; line-height: 1.26; color: #16191d; margin: 0; }
+  h1 { font-size: 12.5pt; margin: 0 0 0.6mm 0; letter-spacing: -0.2px; }
+  .sub { font-size: 7pt; color: #4a5158; margin: 0 0 1.6mm 0; }
+  h2 { font-size: 8.2pt; margin: 2.2mm 0 0.8mm 0; padding-bottom: 0.4mm;
+       border-bottom: 1px solid #1f5c8b; color: #1f5c8b; letter-spacing: .1px; }
+  h3 { font-size: 7.4pt; margin: 1.4mm 0 0.4mm 0; color: #16191d; }
+  p { margin: 0 0 0.9mm 0; }
+  ul { margin: 0.3mm 0 0.9mm 0; padding-left: 3.5mm; }
+  li { margin-bottom: 0.3mm; }
+  table { border-collapse: collapse; width: 100%; margin: 0.7mm 0 1.1mm 0; font-size: 6.75pt; }
+  th { background: #eef3f8; text-align: left; padding: 1px 3px; border: 0.7px solid #c3cfdb;
+       font-weight: 600; }
+  td { padding: 1px 3px; border: 0.7px solid #d5dde5; vertical-align: top; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .win { color: #14652f; font-weight: 600; }
+  .bad { color: #a4262c; font-weight: 600; }
+  code { font-family: Consolas, monospace; font-size: 7.3pt; background: #f2f4f7; padding: 0 1.5px; }
+  .key { background: #f7f9fb; border-left: 2.2px solid #1f5c8b; padding: 1.2mm 2mm; margin: 1.3mm 0; }
+  .foot { margin-top: 2mm; padding-top: 1.2mm; border-top: 0.7px solid #c3cfdb;
+          font-size: 7pt; color: #545c64; }
+  .tag { font-size: 6.8pt; background:#1f5c8b; color:#fff; padding: 0.3mm 1.2mm; border-radius: 2px; }
+</style>
+
+<h1>Drift-Sense Phase 2 — Failure Analysis</h1>
+<p class="sub"><b>PS-02 · Applied Materials · Team "The T Guys"</b> (Aryan Chourasia, Govinda Podder, Ashish Bajaj, Devaansh Gupta) · Thapar Institute of Engineering &amp; Technology · 3 September 2026</p>
+
+<div class="key">
+<b>Reading convention used throughout.</b> Every number is labelled by its source, because the two
+disagree and conflating them is the central methodological trap of Phase 2.
+<b>[REAL]</b> = the organizers' 20-pair sample scored against their withheld ground truth — never
+trained on, never fitted to, used as a pure validation fold. <b>[OURS]</b> = our own generator or the
+organizers' generator source re-run with new seeds. Where a fix looked good on [OURS] we report
+whether it survived [REAL]; twice, it did not.
+</div>
+
+<h2>1. Where we stand, and the arc that got us there</h2>
+<p>Shipped configuration is classical-led: <code>solve.py</code> (NCC + scale/rotation search +
+parabolic sub-pixel refinement) supplies all six output columns. The learned matcher
+(DriftMatchNet) remains wired into the declared DriftRoute architecture but is off by default —
+<b>because it was measured to lose, not assumed to.</b></p>
+
+<table>
+<tr><th>Configuration (chronological)</th><th class="n">Localization /40 [REAL]</th><th>What changed</th></tr>
+<tr><td>Original Phase 2 build (net supplies x,y; FOUND_PEAK 0.68)</td><td class="n bad">13.35</td><td>—</td></tr>
+<tr><td>+ classical x,y instead of net</td><td class="n">23.10</td><td>Net overfit our textures (§4.1)</td></tr>
+<tr><td>+ FOUND_PEAK 0.68 → 0.53</td><td class="n">29.70</td><td>Cost-asymmetry recalibration (§3.1)</td></tr>
+<tr><td>+ p008 rotation-aware scale scan</td><td class="n win">35.60</td><td>Root-caused bug (§2.1)</td></tr>
+</table>
+
+<p><b>Final measured position.</b> [REAL]: localization <b>35.60/40</b> (Set A mean credit 1.000,
+Set B 0.800), 15/16 present pairs within 5 px, rejection F1 <b>0.968</b> (TP 15, FP 0, FN 1),
+rotation <b>10/10</b>, scale <b>8.62/10</b>, calibration AUC 0.789, CPU-only 1.3–3.5 s/pair against a
+5 s median budget. [OURS, organizers' generator re-run, 350 pairs over two disjoint draws]: rubric
+core <b>71.0–73.5 / 85</b>. <b>We expect the blind 200 to land nearer the second figure</b> — the
+20-pair sample's Set B is milder than the real one, and the organizers' own naive baseline scores
+0.80 mean credit on it, above the 0.30–0.55 difficulty band their dataset specification targets.</p>
+
+<h2>2. Failure modes found by measurement, root-caused, and fixed</h2>
+
+<h3>2.1 p008 — our matcher failed a pair the organizers' own naive baseline solved</h3>
+<p>The most instructive single failure. On pair p008 the provided ZNCC baseline earned full credit
+(1.00) and we earned zero. Rather than treat it as noise we traced the ranking: the scale search
+evaluated each candidate zoom at <b>angle 0 only</b>, while the pipeline searched ±5°. On a rotated
+pair the wrong zoom therefore won the scale ranking, and every later stage inherited it. One-line
+fix (<code>SCAN_ANGLES = PHASE2_ANGLES</code>) made the scan rotation-aware.
+<b>Effect: 29.70 → 35.60 /40 [REAL], and Set A rose to a perfect 1.000.</b> The lesson generalises:
+a coarse stage that marginalises over the wrong variable silently caps everything downstream.</p>
+
+<h3>2.2 A "fundamental limit" that was our own bug — the Set C decoy defect</h3>
+<p>For several days we believed absent-pair rejection had a <i>signal separability ceiling</i>: absent
+pairs scored peak NCC up to 0.967 against a present-pair median of 0.933, and no threshold separated
+them. We had written this up as an inherent limitation of scalar rejection. <b>It was a defect in our
+own generator.</b> Absent search images were rendered from the reference's own layout with the
+landmark removed, so the two periodic backgrounds were byte-identical and a periodic template matched
+the decoy perfectly. Rendering absent wides from an independently instantiated, same-family layout
+whose lattice does not co-register fixed it:</p>
+<table>
+<tr><th>Absent-pair peak NCC [OURS, seed 950000]</th><th class="n">Before</th><th class="n">After</th></tr>
+<tr><td>Median / maximum</td><td class="n">0.822 / 0.967</td><td class="n win">0.533 / 0.877</td></tr>
+<tr><td>Rejection AUC (raw peak) · F1</td><td class="n">0.789 · 0.876</td><td class="n win">0.945 · 0.939</td></tr>
+</table>
+<p>The present-pair distribution was unchanged, confirming the fix touched only the defect. This is
+the finding we would most want a reviewer to see: <b>a "fundamental limit" that appears only in your
+own data is a bug until proven otherwise.</b> The organizers' dataset specification (§4) warns of
+exactly this construction; we reproduced the mistake independently before reading it that closely.</p>
+
+<h3>2.3 The rotation sign convention was backwards on the first attempt</h3>
+<p><code>THETA_SIGN</code> was first chosen by pattern-matching the geometry rather than by test.
+Correlating recovered against signed ground-truth angle gave <b>−0.95</b> (median error 3.35°) — an
+unambiguous inversion — and <b>+0.95</b> (median 0.26°) after flipping. Since confirmed three further
+ways: against the organizers' ground truth, their generator source, and the convention written in
+their specification. Rotation now scores <b>10/10 [REAL]</b>. A geometric sign or pivot convention
+must never ship on a guess.</p>
+
+<h3>2.4 Pose refinement overshot bounds we had been told</h3>
+<p>Found in final verification: the golden-section refinements converge past an interval endpoint, so
+three recovered scales fell <i>outside</i> the disclosed [8,12] range (p001 → 7.882 vs truth 8.00;
+p013 → 12.174 vs 12.00), each forfeiting a full tier. Because the specification requires the graded
+set to <i>reach</i> both endpoints exactly, this is systematic. Clamping the <b>reported</b> pose —
+deliberately not the search, which could move x,y — lifted scale <b>8.00 → 8.62/10 [REAL]</b> with
+localization and rejection byte-identical.</p>
+
+<h2>3. Open limitations we can quantify but did not solve</h2>
+
+<h3>3.1 The severity-4 rejection cliff — our dominant remaining loss</h3>
+<p>At the highest degradation level, dose and noise crush the true-match correlation peak below
+<code>FOUND_PEAK = 0.53</code>, so the pair is declared absent — forfeiting <i>both</i> its
+localization and its pose credit even though the predicted coordinate was accurate.</p>
+<table>
+<tr><th>False-rejects among present pairs [OURS, organizers' generator]</th><th class="n">200-draw</th><th class="n">150-draw</th></tr>
+<tr><td>Set B severity 3</td><td class="n">8 / 28 (29%)</td><td class="n">4 / 23 (17%)</td></tr>
+<tr><td>Set B severity 4</td><td class="n bad">17 / 19 (89%)</td><td class="n bad">17 / 18 (94%)</td></tr>
+<tr><td>All present pairs</td><td class="n">25 / 156 (16%)</td><td class="n">22 / 110 (20%)</td></tr>
+</table>
+<p>Localization at severity 4 stays sub-pixel; the credit is lost purely to the presence flag. The
+root cause is structural: <b>a single scalar threshold cannot simultaneously reject periodic absent
+decoys (which wants a high threshold) and accept crushed present peaks (which wants a low one)</b> —
+the two distributions overlap. The honest fix is a richer, severity-aware presence signal, not a
+different scalar. We deliberately did <b>not</b> retune the threshold to the 20 validation pairs;
+that would be fitting to the fold we use to keep ourselves honest.</p>
+
+<h3>3.2 Confidence calibration — our weakest scored bucket</h3>
+<p>Calibration AUC is 0.789 [REAL] / 0.740 [OURS] against a 10-point bucket. Section 4.2 records a
+principled attempt to improve it that we rejected on evidence.</p>
+
+<h3>3.3 Generator fidelity — the limitation behind the other two</h3>
+<p>Our present-pair degradation remains too mild: only ~4% of our present pairs fall below peak 0.55,
+against roughly 50% in the organizers' sample. Our synthetic error population is dominated by
+confident mislocalizations on periodic structure, whereas theirs is dominated by low-confidence
+rejections. <b>This mismatch is why signals tuned on our data can invert on theirs</b>, and it is the
+single most valuable thing we would fix with more time.</p>
+
+<h2>4. Negative results — things we built, measured, and did not ship</h2>
+
+<h3>4.1 The overfitting hypothesis, tested by removing its cause</h3>
+<p>The project's most-cited assumption was "the CNN overfit our generator." We tested it directly:
+re-trained the identical architecture and hyperparameters on ~3,000 pairs synthesised from the
+<i>organizers' own generator source</i> with new seeds (their 20 sample pairs never trained on),
+selected the checkpoint on a disjoint held-out set, and scored once with weights frozen.</p>
+<table>
+<tr><th>Configuration</th><th class="n">Localization /40 [REAL]</th><th class="n">Site found (≤5 px)</th><th class="n">Set A credit</th></tr>
+<tr><td>Classical (shipped)</td><td class="n win">35.60</td><td class="n">15 / 16</td><td class="n">1.000</td></tr>
+<tr><td>CNN trained on our generator</td><td class="n bad">13.35</td><td class="n">7 / 16</td><td class="n">0.375</td></tr>
+<tr><td>CNN trained on their generator</td><td class="n">28.78</td><td class="n">15 / 16</td><td class="n">0.825</td></tr>
+</table>
+<p>The diagnosis is confirmed with a large effect — changing only the training distribution more than
+doubled the real-data score and took site recall from 7/16 to 15/16. <b>Yet classical still won, and
+the reason is specific:</b> the retrained CNN matches classical on <i>recall</i> and loses on
+<i>precision</i> — it lands inside 5 px but outside 1 px, forfeiting tier credit that parabolic
+sub-pixel refinement collects. Since localization is scored on tiers, "same recall, worse precision"
+costs 6.8/40. Not adopted; nothing shipped changed.</p>
+
+<h3>4.2 A calibration signal that gained 0.21 AUC on our data and lost 0.29 on theirs</h3>
+<p>Because AUC is invariant to monotonic rescaling, improving calibration requires a signal with
+better <i>ordering</i>, not a recalibration curve. We tested replacing raw peak NCC with
+<code>distinct = peak · (1 − second_ratio)</code> across three independent 150-pair draws (450 pairs,
+disjoint seeds), requiring a win on all three to guard against overfitting.</p>
+<table>
+<tr><th>Calibration AUC</th><th class="n">Draw 1</th><th class="n">Draw 2</th><th class="n">Draw 3</th><th class="n">Organizers' 20 [REAL]</th></tr>
+<tr><td>Raw peak NCC (shipped)</td><td class="n">0.603</td><td class="n">0.561</td><td class="n">0.531</td><td class="n win">0.789</td></tr>
+<tr><td><code>distinct</code> (candidate)</td><td class="n win">0.786</td><td class="n win">0.745</td><td class="n win">0.785</td><td class="n bad">0.526</td></tr>
+</table>
+<p>Consistent, large gains on our generator; a <b>0.26 regression on real data</b>. The cause is the
+error-population mismatch of §3.3: <code>distinct</code> is built to catch confident mislocalizations
+on periodic structure, which our generator over-produces and the real sample barely contains, while
+raw peak better orders the low-confidence rejection that is the real sample's only error.
+<b>Rejected; raw peak retained.</b> Had we validated only on our own data we would have shipped a
+change that lowered our score.</p>
+
+<h3>4.3 Fourier–Mellin invariant pose estimation</h3>
+<p>Built and measured: median scale error ~90% against the grid search's 1.1%. The cause is physical,
+not implementational — the 1 µm reference field contains only 3–14 lattice periods, too few for a
+usable spectral peak. Rejected on evidence and recorded so it is not revisited.</p>
+
+<h2>5. A process failure, found in final verification</h2>
+<p>Our <code>requirements.txt</code> pinned the exact versions produced by <code>pip freeze</code> on
+our Python 3.12 development machine. The reference machine is <b>Python 3.11</b>, and two of those
+releases are 3.12-only (<code>numpy 2.5.1</code> declares <code>Requires-Python &gt;=3.12</code>).
+<code>pip install -r requirements.txt</code> therefore <b>failed outright</b> on a clean 3.11
+environment — a defect that would have scored zero on every pair while every accuracy number in this
+document remained true. It was invisible because all prior verification ran on 3.12. Replaced with
+ranges and re-verified end-to-end on Python 3.11.9: install succeeds and the prediction file is
+byte-identical to the 3.12 run. <b>An environment assumption is a failure mode, and it must be tested
+on the target version, not the development one.</b></p>
+
+<h2>6. What we would do next, in priority order</h2>
+<ul>
+<li><b>Severity-aware presence decision</b> (§3.1) — the largest recoverable loss. Combine peak with a
+degradation estimate so the accept threshold adapts, instead of one scalar serving both regimes.</li>
+<li><b>Close the generator-fidelity gap</b> (§3.3) — our error population must match theirs before any
+signal tuned on our data can be trusted; this is the precondition for §3.2 and §3.1 alike.</li>
+<li><b>Exploit large-scale structure for rejection</b> — the organizers' specification requires absent
+decoys to carry macro-structure the search image lacks; a signal keyed on that should outperform a
+scalar peak, and unlike a threshold tweak it addresses the cause.</li>
+</ul>
+
+<p class="foot"><span class="tag">Validation discipline</span> &nbsp;The organizers' 20 sample pairs
+were scored only, never trained on and never used to select a threshold, checkpoint or signal. Every
+adopted change was justified on our own data or from the disclosed specification and then
+<i>checked</i> against the sample; two changes that our data endorsed (§4.1, §4.2) were rejected when
+that check failed. Datasets are regenerable from documented seeds; the shipped path requires only
+numpy, pillow and scipy — no GPU, no torch, no network.</p>
